@@ -1,36 +1,33 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# AICD3 Launchpad
 
-## Getting Started
+Internship postings from pharma, biotech and startup companies, tracked for AICD3 students: a dashboard, a filterable job board, company info, and a staff-only admin area with a review queue.
 
-First, run the development server:
+## Run it
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+pnpm install
+pnpm dev        # http://localhost:3000
+pnpm build && pnpm start   # production build
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Routes
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+| URL | Page |
+| --- | --- |
+| `/` | Dashboard |
+| `/jobs` | Job board |
+| `/companies` | Company info |
+| `/admin` | Admin (staff) |
+| `/settings` | Settings |
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## How it's put together
 
-## Learn More
+- **Next.js App Router.** `app/layout.tsx` wraps every route in `components/AppShell.tsx` (sidebar, top bar, ⌘K menu, dialogs). The shell renders only in the browser (`components/ClientRoot.tsx` loads it with `ssr: false`) because it reads saved settings and each person's lists from browser storage on first render.
+- **Pages** live in `views/` and are mounted by the matching `app/<route>/page.tsx`.
+- **Data** goes through `lib/backend.ts`. With no database connected it runs on the sample postings in `lib/data.ts`, saved in the visitor's browser, and the top bar shows "Sample data". Swap that hook's reads and writes for API calls (for example Prisma on Neon) to share real postings.
+- **Styling** is Tailwind CSS v3 with the design tokens in `app/globals.css` and `tailwind.config.js`; UI pieces are shadcn/ui on Radix. Charts use ECharts; the map uses d3-geo with us-atlas.
+- **Fonts**: Geist and Geist Mono from the `geist` package, so builds don't need network access to Google Fonts.
 
-To learn more about Next.js, take a look at the following resources:
+## Deploy
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Push to GitHub and import the repository in Vercel; the defaults work (framework Next.js, `pnpm build`). Until a database and sign-in are wired up, every visitor gets their own sample data and the Admin area is open to anyone.
