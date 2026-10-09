@@ -43,3 +43,5 @@ next-env.d.ts
 # AI agent notes (Next.js recreates these when an AI agent runs `next dev`)
 /AGENTS.md
 /CLAUDE.md
+.prisma-composer/
+.alchemy/
