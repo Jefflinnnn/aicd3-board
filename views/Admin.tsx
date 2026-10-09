@@ -15,6 +15,7 @@ import { EChart, chartBase, cssColor } from "@/components/EChart"
 import { CatChip, DeadlineCell, LocationCell, PageHead, Panel, StatusPill } from "@/components/common"
 import { ImportDialog, JobForm } from "@/views/AdminForms"
 import { ReviewQueue } from "@/views/ReviewQueue"
+import { People } from "@/views/People"
 import { reviewFlags, stage } from "@/lib/review"
 import { cn } from "@/lib/utils"
 import { useApp } from "@/lib/state"
@@ -240,6 +241,8 @@ export default function Admin() {
       </div>
 
       <ReviewQueue flash={flash === "admin-review"} onEdit={(sj) => openForm(sj, true)} />
+
+      <People flash={flash === "admin-people"} />
 
       <Panel
         id="admin-chart"

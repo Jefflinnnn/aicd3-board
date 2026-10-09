@@ -125,6 +125,15 @@ export const COMPANIES: Company[] = [
   { id: "recursion", name: "Recursion", type: "Startup", hq: "Salt Lake City, UT", site: "https://www.recursion.com", focus: [0.35, 0.1, 0.55], w: 2 },
   { id: "generate", name: "Generate:Biomedicines", type: "Startup", hq: "Somerville, MA", site: "https://www.generatebiomedicines.com", focus: [0.5, 0.05, 0.45], w: 2 },
   { id: "dyno", name: "Dyno Therapeutics", type: "Startup", hq: "Watertown, MA", site: "https://www.dynotx.com", focus: [0.55, 0.05, 0.4], w: 1 },
+  // companies the scraper covers (scraper/pharma_internships.py); w: 0 keeps them out of the sample data
+  { id: "abbvie", name: "AbbVie", type: "Large pharma", hq: "North Chicago, IL", site: "https://www.abbvie.com", focus: [0.3, 0.5, 0.2], w: 0 },
+  { id: "astrazeneca", name: "AstraZeneca", type: "Large pharma", hq: "Cambridge, UK", site: "https://www.astrazeneca.com", focus: [0.35, 0.45, 0.2], w: 0 },
+  { id: "bms", name: "Bristol Myers Squibb", type: "Large pharma", hq: "Princeton, NJ", site: "https://www.bms.com", focus: [0.3, 0.5, 0.2], w: 0 },
+  { id: "sanofi", name: "Sanofi", type: "Large pharma", hq: "Paris, France", site: "https://www.sanofi.com", focus: [0.3, 0.5, 0.2], w: 0 },
+  { id: "gsk", name: "GSK", type: "Large pharma", hq: "London, UK", site: "https://www.gsk.com", focus: [0.3, 0.5, 0.2], w: 0 },
+  { id: "boehringer", name: "Boehringer Ingelheim", type: "Large pharma", hq: "Ingelheim, Germany", site: "https://www.boehringer-ingelheim.com", focus: [0.3, 0.5, 0.2], w: 0 },
+  { id: "takeda", name: "Takeda", type: "Large pharma", hq: "Tokyo, Japan", site: "https://www.takeda.com", focus: [0.3, 0.5, 0.2], w: 0 },
+  { id: "revmed", name: "Revolution Medicines", type: "Mid-size biotech", hq: "Redwood City, CA", site: "https://www.revmed.com", focus: [0.5, 0.4, 0.1], w: 0 },
 ]
 export const coById = (id: string): Company =>
   COMPANIES.find((c) => c.id === id) || { id, name: id, type: "Startup", hq: "", site: "#", focus: [1, 0, 0], w: 0 }
