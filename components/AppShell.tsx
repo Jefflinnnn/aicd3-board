@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
-import { BriefcaseBusiness, Building2, ChevronRight, ChevronsUpDown, Keyboard, Monitor, Moon, Sun, GraduationCap, LayoutDashboard, Lock, PanelLeftClose, PanelLeftOpen, Search, Settings as SettingsIcon, ShieldCheck } from "lucide-react"
+import { BriefcaseBusiness, Building2, ChevronRight, ChevronsUpDown, Keyboard, LogOut, Monitor, Moon, Sun, GraduationCap, LayoutDashboard, Lock, PanelLeftClose, PanelLeftOpen, Search, Settings as SettingsIcon, ShieldCheck } from "lucide-react"
 import { Toaster } from "@/components/ui/sonner"
 import {
   DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuRadioGroup,
@@ -261,7 +261,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
   const initials = (backend.myName || (mode === "preview" ? "Guest" : isStaff ? "Staff" : "Student"))
     .split(/\s+/).map((w) => w[0]).join("").slice(0, 2).toUpperCase()
-  const roleLabel = isStaff ? (studentView ? "Staff, viewing as student" : "Program staff") : "Student"
+  const roleLabel = isStaff ? (studentView ? "Staff, viewing as student" : backend.me.role === "admin" ? "Admin" : "Program staff") : mode === "pending" ? "Waiting for approval" : "Student"
 
   const toggle = () => {
     const next = !collapsed
@@ -352,6 +352,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                 <DropdownMenuContent side={collapsed ? "right" : "top"} align={collapsed ? "end" : "start"} className="w-60">
                   <DropdownMenuLabel className="font-normal">
                     <span className="block text-sm font-medium">{backend.myName || (mode === "preview" ? "Guest" : "You")}</span>
+                    {backend.me.email && <span className="block truncate text-xs text-muted-foreground">{backend.me.email}</span>}
                     <span className="block text-xs text-muted-foreground">{roleLabel}</span>
                   </DropdownMenuLabel>
                   <DropdownMenuSeparator />
@@ -373,6 +374,14 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                     <DropdownMenuRadioItem value="light"><Sun className="mr-2 size-4" /> Light</DropdownMenuRadioItem>
                     <DropdownMenuRadioItem value="dark"><Moon className="mr-2 size-4" /> Dark</DropdownMenuRadioItem>
                   </DropdownMenuRadioGroup>
+                  {mode !== "preview" && (
+                    <>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem className="pl-8" onSelect={() => backend.signOut()}>
+                        <LogOut className="mr-2 size-4" /> Sign out
+                      </DropdownMenuItem>
+                    </>
+                  )}
                 </DropdownMenuContent>
               </DropdownMenu>
             </div>
@@ -428,7 +437,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
               ) : page === "settings" ? (
                 children
               ) : (
-                <Gate kind={mode === "loading" ? "loading" : "signedout"} />
+                <Gate kind={mode} />
               )}
               <Footer onShortcuts={() => window.dispatchEvent(new Event("open-shortcuts"))} />
             </div>

@@ -2,12 +2,13 @@ import type { Metadata, Viewport } from "next";
 // Geist ships with the app (the `geist` package wraps next/font/local), so builds don't need to reach Google Fonts.
 import { GeistSans } from "geist/font/sans";
 import { GeistMono } from "geist/font/mono";
-import { ClientRoot } from "@/components/ClientRoot";
 import "./globals.css";
 
 export const metadata: Metadata = {
   title: "AICD3 Launchpad",
   description: "Internship postings from pharma, biotech and startup companies, tracked for AICD3 students.",
+  // student data sits behind sign-in; keep every page out of search engines
+  robots: { index: false, follow: false },
 };
 
 export const viewport: Viewport = {
@@ -20,9 +21,7 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html lang="en" className={`${GeistSans.variable} ${GeistMono.variable}`} suppressHydrationWarning>
-      <body>
-        <ClientRoot>{children}</ClientRoot>
-      </body>
+      <body>{children}</body>
     </html>
   );
 }

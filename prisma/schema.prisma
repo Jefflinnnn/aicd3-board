@@ -1,0 +1,197 @@
+// AICD3 Launchpad database.
+//
+// People sign in through Neon Auth (Google). Neon Auth keeps its own tables in the
+// `neon_auth` schema; this app keeps one Profile per signed-in person, keyed by the
+// Neon Auth user id, with the role and access status the app checks on every request.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../lib/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+/// What a person can do. Students read postings and keep their own lists; staff also run the
+/// review queue, edit postings and see requests and reports; admins also manage people.
+enum Role {
+  student
+  staff
+  admin
+}
+
+/// Whether a signed-in person may use the app yet.
+enum AccessStatus {
+  pending
+  active
+  blocked
+}
+
+/// Where a posting sits: on the job board, waiting for staff review, rejected by staff
+/// (kept so later imports don't send it back), or in the bin (purged after 30 days).
+enum PostingState {
+  live
+  review
+  rejected
+  bin
+}
+
+enum MyStatus {
+  saved
+  applied
+}
+
+model Profile {
+  /// Neon Auth user id
+  id        String       @id
+  /// lower-case, from the sign-in provider
+  email     String
+  /// whether the sign-in provider verified the address (Google does)
+  emailVerified Boolean  @default(false)
+  name      String?
+  role      Role         @default(student)
+  status    AccessStatus @default(pending)
+  /// previous visit, for "new since you were last here"
+  lastVisit DateTime?
+  /// this person's dashboard arrangement { order: string[], hidden: string[] }
+  layout    Json?
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  statuses JobStatus[]
+  notes    JobNote[]
+  requests CompanyRequest[]
+  reports  IssueReport[]
+
+  @@index([status])
+  @@index([email])
+}
+
+/// Access decided before someone first signs in: staff invites and pre-approved students.
+/// Applied (and removed) the first time a person with this verified email signs in.
+model AccessGrant {
+  /// lower-case email address
+  email     String   @id
+  role      Role     @default(student)
+  grantedBy String?
+  createdAt DateTime @default(now())
+}
+
+model Posting {
+  id        String       @id
+  state     PostingState @default(live)
+  title     String
+  /// company id from lib/data.ts COMPANIES
+  company   String
+  /// primary location (older data); `locations` lists every site
+  location  String
+  locations String[]
+  category  String
+  /// first seen
+  posted    DateTime     @db.Date
+  /// null = rolling
+  deadline  DateTime?    @db.Date
+  term      String       @default("")
+  mode      String       @default("Onsite")
+  pay       String       @default("")
+  url       String
+  summary   String       @default("")
+  resp      String[]
+  quals     String[]
+  closed    Boolean      @default(false)
+  sample    Boolean      @default(false)
+  addedAt   DateTime?
+  /// ReviewInfo while in review/rejected { flags, source, at, status, decidedAt? }
+  review    Json?
+  deletedAt DateTime?
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  statuses JobStatus[]
+  notes    JobNote[]
+
+  @@index([state])
+  @@index([company])
+}
+
+model JobStatus {
+  userId    String
+  postingId String
+  status    MyStatus
+  updatedAt DateTime @updatedAt
+
+  user    Profile @relation(fields: [userId], references: [id], onDelete: Cascade)
+  posting Posting @relation(fields: [postingId], references: [id], onDelete: Cascade)
+
+  @@id([userId, postingId])
+}
+
+model JobNote {
+  userId    String
+  postingId String
+  text      String
+  updatedAt DateTime @updatedAt
+
+  user    Profile @relation(fields: [userId], references: [id], onDelete: Cascade)
+  posting Posting @relation(fields: [postingId], references: [id], onDelete: Cascade)
+
+  @@id([userId, postingId])
+}
+
+/// A student asking staff to track another company.
+model CompanyRequest {
+  id         String    @id
+  userId     String
+  name       String
+  site       String    @default("")
+  cat        String    @default("")
+  email      String    @default("")
+  why        String    @default("")
+  date       String
+  createdAt  DateTime  @default(now())
+  resolvedAt DateTime?
+  resolvedBy String?
+
+  user Profile @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([resolvedAt])
+}
+
+/// A problem a student flagged on a posting or the site.
+model IssueReport {
+  id         String    @id
+  userId     String
+  kind       String
+  jobId      String    @default("")
+  details    String    @default("")
+  email      String    @default("")
+  date       String
+  createdAt  DateTime  @default(now())
+  resolvedAt DateTime?
+  resolvedBy String?
+
+  user Profile @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([resolvedAt])
+}
+
+/// Site-wide settings: one row, id 1.
+model SiteMeta {
+  id          Int       @id @default(1)
+  customCats  Json      @default("[]")
+  lastUpdated DateTime?
+  lastImport  Json?
+}
+
+/// Who changed access or bulk-loaded postings, and when.
+model AuditLog {
+  id      String   @id @default(cuid())
+  actorId String?
+  action  String
+  target  String?
+  detail  Json?
+  at      DateTime @default(now())
+
+  @@index([at])
+}
