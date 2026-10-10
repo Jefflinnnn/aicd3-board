@@ -133,7 +133,7 @@ export default function Admin() {
   const requests = allInbox.flatMap((d) => d.requests.map((r) => ({ ...r, uid: d.uid })))
   const reports = allInbox.flatMap((d) => d.reports.map((r) => ({ ...r, uid: d.uid })))
   const list = jobs
-    .filter((j) => (!q.trim() || j.title.toLowerCase().includes(q.trim().toLowerCase())) && (co === "all" || j.company === co))
+    .filter((j) => (!q.trim() || [j.title, j.reqId || ""].join(" ").toLowerCase().includes(q.trim().toLowerCase())) && (co === "all" || j.company === co))
     .sort((a, b) => b.posted.localeCompare(a.posted) || a.title.localeCompare(b.title))
   const openForm = (j: Job | null, inReview = false) => { setEditing(j); setEditingStaged(inReview); setFormKey((k) => k + 1); setFormOpen(true) }
   const pending = staged.filter((s) => s.review.status === "pending")
@@ -269,7 +269,7 @@ export default function Admin() {
           <div className="flex flex-wrap gap-2">
             <div className="relative">
               <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-              <Input type="search" aria-label="Filter by title" placeholder="Filter by title" value={q} onChange={(e) => { setQ(e.target.value); setPage(1) }} className="h-9 w-52 pl-8" />
+              <Input type="search" aria-label="Filter by title or job ID" placeholder="Filter by title or job ID" value={q} onChange={(e) => { setQ(e.target.value); setPage(1) }} className="h-9 w-52 pl-8" />
             </div>
             <Select value={co} onValueChange={(v) => { setCo(v); setPage(1) }}>
               <SelectTrigger className="h-9 w-48" aria-label="Filter by company"><SelectValue /></SelectTrigger>

@@ -6,16 +6,25 @@
  * If they have signed in already, their account changes now; otherwise the role is applied
  * the first time they sign in with that (Google-verified) email.
  */
-import "dotenv/config"
+import { config } from "dotenv"
 import { PrismaNeon } from "@prisma/adapter-neon"
 import { PrismaPg } from "@prisma/adapter-pg"
 import { PrismaClient } from "../lib/generated/prisma/client"
+
+// `neon deploy` writes .env.local; values there win over .env (same order as Next.js)
+config({ path: [".env.local", ".env"], quiet: true })
 
 const [emailRaw, roleRaw = "admin"] = process.argv.slice(2)
 const email = (emailRaw || "").trim().toLowerCase()
 const role = roleRaw as "student" | "staff" | "admin"
 if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !["student", "staff", "admin"].includes(role)) {
   console.error("Usage: pnpm grant-access <email> [student|staff|admin]")
+  process.exit(1)
+}
+const domains = (process.env.SIGN_IN_EMAIL_DOMAINS || "ucsf.edu").split(",").map((d) => d.trim().toLowerCase().replace(/^@/, "")).filter(Boolean)
+const host = email.split("@")[1]
+if (!domains.some((d) => host === d || host.endsWith("." + d))) {
+  console.error(`Only ${domains.map((d) => "@" + d).join(", ")} addresses can sign in (SIGN_IN_EMAIL_DOMAINS), so ${email} could never use this role.`)
   process.exit(1)
 }
 const url = process.env.DATABASE_URL

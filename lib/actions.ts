@@ -28,6 +28,7 @@ export async function loadState(opts: { refresh?: boolean } = {}): Promise<LoadR
   const v = await getViewer()
   if (!v) return { mode: "signedout" }
   const me: Me = { id: v.id, canEdit: v.status === "active" && isStaff(v.role), role: v.role, name: v.name, email: v.email }
+  if (v.outside) return { mode: "outside", me }
   if (v.status !== "active") return { mode: v.status === "blocked" ? "blocked" : "pending", me }
 
   const prisma = db()

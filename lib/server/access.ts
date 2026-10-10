@@ -3,15 +3,18 @@ import { cache } from "react"
 import { auth } from "@/lib/auth/server"
 import { db } from "@/lib/server/db"
 import type { AccessStatus, Role } from "@/lib/generated/prisma/client"
+import { autoApproveDomains, canSignIn, inDomains } from "@/lib/domains"
 
 /**
  * Who is asking, and what they may do.
  *
- * Signing in (Google through Neon Auth) proves who someone is. Whether they can use the app is
- * decided here, from this app's own Profile table:
+ * Signing in (a one-time code emailed through Neon Auth) proves the person owns the address.
+ * Whether they can use the app is decided here:
+ *   - only addresses at SIGN_IN_EMAIL_DOMAINS (default ucsf.edu) get anywhere; anyone else is turned
+ *     away on every request, however they obtained a session (lib/domains.ts);
  *   - a staff invite or pre-approval for their verified email (AccessGrant) gives that role at once;
- *   - otherwise, on their first sign-in, a verified email at a domain in ALLOWED_EMAIL_DOMAINS makes them
- *     an active student (later, only staff decide: someone set back to pending or blocked stays that way);
+ *   - otherwise, on their first sign-in, a verified email at AUTO_APPROVE_EMAIL_DOMAINS makes them an
+ *     active student (later, only staff decide: someone set back to pending or blocked stays that way);
  *   - otherwise they wait as "pending" until staff approve them on the Admin page.
  * Unverified addresses (e.g. an email/password sign-up that hasn't confirmed) never get access
  * from a grant or domain match, so nobody can claim a staff invite by typing someone's address.
@@ -25,6 +28,8 @@ export interface Viewer {
   status: AccessStatus
   lastVisit: Date | null
   layout: unknown
+  /** signed in with an address outside SIGN_IN_EMAIL_DOMAINS: no access, no profile kept */
+  outside?: boolean
 }
 
 export class AccessError extends Error {
@@ -38,16 +43,7 @@ export class AccessError extends Error {
   }
 }
 
-export const allowedDomains = () =>
-  (process.env.ALLOWED_EMAIL_DOMAINS || "")
-    .split(",")
-    .map((s) => s.trim().toLowerCase().replace(/^@/, ""))
-    .filter(Boolean)
-
-const domainOk = (email: string) => {
-  const d = email.split("@")[1] || ""
-  return allowedDomains().some((a) => d === a || d.endsWith("." + a))
-}
+const autoApprove = (email: string) => inDomains(email, autoApproveDomains())
 
 export async function audit(actorId: string | null, action: string, target?: string | null, detail?: unknown) {
   await db().auditLog.create({ data: { actorId, action, target: target ?? null, detail: detail === undefined ? undefined : JSON.parse(JSON.stringify(detail)) } })
@@ -61,11 +57,13 @@ export const getViewer = cache(async (): Promise<Viewer | null> => {
   const email = u.email.trim().toLowerCase()
   const verified = !!u.emailVerified
   const name = u.name?.trim() || null
+  if (!canSignIn(email))
+    return { id: u.id, email, emailVerified: verified, name, role: "student", status: "blocked", lastVisit: null, layout: null, outside: true }
   const prisma = db()
 
   let p = await prisma.profile.findUnique({ where: { id: u.id } })
   const grant = verified && (!p || p.status === "pending") ? await prisma.accessGrant.findUnique({ where: { email } }) : null
-  const autoStudent = !p && verified && domainOk(email)
+  const autoStudent = !p && verified && autoApprove(email)
 
   if (!p) {
     p = await prisma.profile.upsert({

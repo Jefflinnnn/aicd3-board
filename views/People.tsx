@@ -105,7 +105,7 @@ export function People({ flash }: { flash?: boolean }) {
       flush
       className={cn("transition-shadow duration-500", flash && "ring-2 ring-primary")}
       title="People & access"
-      sub="Everyone signs in with Google. New accounts wait here until staff approve them, unless their email was invited or matches an approved school domain."
+      sub="Everyone signs in with a code emailed to their UCSF address. New accounts wait here until staff approve them, unless their email was invited or matches an approved school domain."
       right={
         <Segmented
           label="Show"
@@ -124,7 +124,7 @@ export function People({ flash }: { flash?: boolean }) {
       <form onSubmit={sendInvite} className="flex flex-wrap items-end gap-2 border-t px-5 py-3">
         <div className="flex min-w-[220px] flex-1 flex-col gap-1.5">
           <Label htmlFor="invite-email">Invite by email</Label>
-          <Input id="invite-email" type="email" value={email} onChange={(e) => { setEmail(e.target.value); setErr("") }} placeholder="name@school.edu" aria-invalid={!!err} aria-describedby={err ? "invite-err" : undefined} />
+          <Input id="invite-email" type="email" value={email} onChange={(e) => { setEmail(e.target.value); setErr("") }} placeholder="name@ucsf.edu" aria-invalid={!!err} aria-describedby={err ? "invite-err" : undefined} />
         </div>
         <Select value={role} onValueChange={(v) => setRole(v as Role)}>
           <SelectTrigger className="w-36" aria-label="Role"><SelectValue /></SelectTrigger>

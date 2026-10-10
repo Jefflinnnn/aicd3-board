@@ -96,6 +96,9 @@ model Posting {
   mode      String       @default("Onsite")
   pay       String       @default("")
   url       String
+  /// the company's own job / requisition ID (e.g. R-254668); with `company`, how a posting is
+  /// recognised from one scrape to the next even when its title or link changes
+  reqId     String       @default("")
   summary   String       @default("")
   resp      String[]
   quals     String[]
@@ -113,6 +116,7 @@ model Posting {
 
   @@index([state])
   @@index([company])
+  @@index([company, reqId])
 }
 
 model JobStatus {

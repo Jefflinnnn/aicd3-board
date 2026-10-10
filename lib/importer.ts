@@ -4,10 +4,11 @@
 import { CATS, COMPANIES, TODAY, coById, iso, jobLocations, type Job, type StagedJob } from "./data"
 import { reviewFlags, stage as toStage } from "./review"
 import { normalizeUrl } from "./validate"
+import { normalizeLocation } from "./locations"
 
 export const CSV_TEMPLATE =
-  "title,company,locations,category,deadline,first_seen,term,mode,pay,url,description,responsibilities,qualifications\n" +
-  '"Machine Learning Intern",Genentech,"South San Francisco, CA; Remote (US)",Tech,2026-11-15,2026-10-01,Summer 2027,Hybrid,$48–$56/hr,https://careers.gene.com/job/123,"Build models…","Train models | Write pipelines","Python | ML coursework"'
+  "title,company,locations,category,deadline,first_seen,term,mode,pay,url,req_id,description,responsibilities,qualifications\n" +
+  '"Machine Learning Intern",Genentech,"South San Francisco, CA; Remote (US)",Tech,2026-11-15,2026-10-01,Summer 2027,Hybrid,$48–$56/hr,https://careers.gene.com/job/123,R-123456,"Build models…","Train models | Write pipelines","Python | ML coursework"'
 
 export interface ImportRowError { row: number; reason: string }
 export interface ImportPlan {
@@ -94,8 +95,52 @@ function day(v: unknown): string | null {
 }
 
 const sameish = (a: Job, b: Job) =>
-  JSON.stringify([a.title, a.company, jobLocations(a), a.category, a.deadline, a.term, a.mode, a.pay, a.url, a.summary, a.resp, a.quals, !!a.closed]) ===
-  JSON.stringify([b.title, b.company, jobLocations(b), b.category, b.deadline, b.term, b.mode, b.pay, b.url, b.summary, b.resp, b.quals, !!b.closed])
+  JSON.stringify([a.title, a.company, jobLocations(a), a.category, a.deadline, a.term, a.mode, a.pay, a.url, a.reqId || "", a.summary, a.resp, a.quals, !!a.closed]) ===
+  JSON.stringify([b.title, b.company, jobLocations(b), b.category, b.deadline, b.term, b.mode, b.pay, b.url, b.reqId || "", b.summary, b.resp, b.quals, !!b.closed])
+
+/** A link without tracking parameters, fragment or trailing slash, so the same page always compares equal. */
+function canonUrl(u: string): string {
+  try {
+    const x = new URL(u)
+    x.hash = ""
+    for (const k of [...x.searchParams.keys()]) if (/^(utm_|gclid|fbclid|source$|src$|ref$)/i.test(k)) x.searchParams.delete(k)
+    return (x.origin.toLowerCase() + x.pathname.replace(/\/+$/, "") + (x.search || "")).toLowerCase()
+  } catch {
+    return u.trim().toLowerCase()
+  }
+}
+
+/**
+ * Finds the existing posting an incoming row refers to: by company + job ID first, then by the
+ * posting's own link, and by title + company only when the row has neither (a company-site link
+ * doesn't identify a posting).
+ */
+function matcher<T extends Job>(list: T[]) {
+  const byReq = new Map<string, T>()
+  const byUrl = new Map<string, T>()
+  const byTitle = new Map<string, T>()
+  const reqKey = (j: Job) => (j.reqId ? `${j.company}:${j.reqId.trim().toLowerCase()}` : "")
+  const urlKey = (j: Job) => (j.url && j.url !== coById(j.company).site ? canonUrl(j.url) : "")
+  const titleKey = (j: Job) => `${j.company}:${j.title.trim().toLowerCase()}`
+  for (const j of list) {
+    if (reqKey(j)) byReq.set(reqKey(j), j)
+    if (urlKey(j)) byUrl.set(urlKey(j), j)
+    byTitle.set(titleKey(j), j)
+  }
+  return {
+    find(n: Job): T | undefined {
+      const r = reqKey(n) && byReq.get(reqKey(n))
+      if (r) return r
+      const u = urlKey(n) && byUrl.get(urlKey(n))
+      // same link but a different job ID: a different posting
+      if (u && !(n.reqId && u.reqId && u.reqId.trim().toLowerCase() !== n.reqId.trim().toLowerCase())) return u
+      if (!n.reqId && !urlKey(n)) return byTitle.get(titleKey(n))
+      return undefined
+    },
+    /** one key per posting, for spotting duplicate rows within an import */
+    primary: (j: Job) => reqKey(j) ? "r:" + reqKey(j) : urlKey(j) ? "u:" + urlKey(j) : "t:" + titleKey(j),
+  }
+}
 
 export function planImport(text: string, existing: Job[], closeMissing: boolean, staged: StagedJob[] = [], reviewAll = false): ImportPlan {
   const recs = readRecords(text)
@@ -110,7 +155,7 @@ export function planImport(text: string, existing: Job[], closeMissing: boolean,
     if (!title) return errors.push({ row, reason: "Missing a title." })
     const co = COMPANIES.find((c) => c.id === coRaw.toLowerCase() || c.name.toLowerCase() === coRaw.toLowerCase())
     if (!co) return errors.push({ row, reason: coRaw ? `${coRaw} isn't one of the tracked companies.` : "Missing a company." })
-    const locs = list(pick(r, "locations", "location", "city"), /;|\|/)
+    const locs = [...new Set(list(pick(r, "locations", "location", "city"), /;|\|/).map(normalizeLocation).filter(Boolean))]
     const catRaw = str(pick(r, "category", "area")).toLowerCase()
     const catHit = CATS.find((c) => [c.id, c.label.toLowerCase(), c.short.toLowerCase()].includes(catRaw))?.id
     const cat = catHit || "other"
@@ -122,6 +167,7 @@ export function planImport(text: string, existing: Job[], closeMissing: boolean,
     const url = urlRaw ? normalizeUrl(urlRaw) : co.site
     if (!url) return errors.push({ row, reason: `Link "${urlRaw}" isn't a valid web address.` })
     const closedRaw = str(pick(r, "closed", "taken down")).toLowerCase()
+    const reqId = str(pick(r, "req_id", "reqid", "job id", "jobid", "requisition", "requisition id")).slice(0, 64)
     incoming.push({
       id: "",
       title,
@@ -135,6 +181,7 @@ export function planImport(text: string, existing: Job[], closeMissing: boolean,
       mode: str(pick(r, "mode", "work mode", "workmode")) || "Onsite",
       pay: str(pick(r, "pay", "salary", "compensation")),
       url,
+      ...(reqId ? { reqId } : {}),
       summary: str(pick(r, "description", "summary", "about")),
       resp: list(pick(r, "responsibilities"), /\||\n/),
       quals: list(pick(r, "qualifications", "requirements"), /\||\n/),
@@ -144,10 +191,9 @@ export function planImport(text: string, existing: Job[], closeMissing: boolean,
     if (!catHit) catMiss.add(incoming.length - 1)
   })
 
-  // match on the posting link when it's specific, otherwise on title + company
-  const sig = (j: Job) => (j.url && j.url !== coById(j.company).site ? "u:" + j.url : `t:${j.company}:${j.title.toLowerCase()}`)
-  const byKey = new Map(existing.map((j) => [sig(j), j]))
-  const stagedByKey = new Map(staged.map((j) => [sig(j), j]))
+  const live = matcher(existing)
+  const held_ = matcher(staged)
+  const matched = new Set<string>() // existing postings this import saw
   const add: Job[] = []
   const update: Job[] = []
   const stage: StagedJob[] = []
@@ -156,11 +202,15 @@ export function planImport(text: string, existing: Job[], closeMissing: boolean,
   let unchanged = 0
   const seenKeys = new Set<string>()
   incoming.forEach((n, i) => {
-    const k = sig(n)
+    const k = live.primary(n)
     if (seenKeys.has(k)) return errors.push({ row: i + 1, reason: "Duplicate of an earlier row in this import." })
     seenKeys.add(k)
-    const old = byKey.get(k)
-    const held = !old && stagedByKey.get(k)
+    const old = live.find(n)
+    if (old) {
+      if (matched.has(old.id)) return errors.push({ row: i + 1, reason: "Matches the same posting as an earlier row in this import." })
+      matched.add(old.id)
+    }
+    const held = !old && held_.find(n)
     if (held) {
       // already in the review queue: keep it there (or keep it rejected), refreshing its details
       if (held.review.status === "rejected") return void rejected++
@@ -182,7 +232,7 @@ export function planImport(text: string, existing: Job[], closeMissing: boolean,
   })
   const companies = [...new Set(incoming.map((j) => j.company))]
   const close = closeMissing
-    ? existing.filter((j) => companies.includes(j.company) && !j.closed && !seenKeys.has(sig(j)) && (j.deadline ? j.deadline >= iso(TODAY) : true)).map((j) => ({ ...j, closed: true }))
+    ? existing.filter((j) => companies.includes(j.company) && !j.closed && !matched.has(j.id) && (j.deadline ? j.deadline >= iso(TODAY) : true)).map((j) => ({ ...j, closed: true }))
     : []
   return { add, update, unchanged, close, stage, restage, rejected, errors, companies }
 }

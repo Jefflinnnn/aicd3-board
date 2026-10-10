@@ -1,6 +1,6 @@
 import type { BinItem, Category, CompanyRequest, IssueReport, Job, StagedJob } from "./data"
 
-export type Mode = "loading" | "cloud" | "preview" | "signedout" | "pending" | "blocked" | "unavailable"
+export type Mode = "loading" | "cloud" | "preview" | "signedout" | "pending" | "blocked" | "outside" | "unavailable"
 export type MyStatus = "saved" | "applied"
 export type Role = "student" | "staff" | "admin"
 export interface DashLayout { order: string[]; hidden: string[] }
@@ -32,7 +32,7 @@ export interface Me {
 /** Everything the app needs on load, scoped to what this person may see. */
 export type LoadResult =
   | { mode: "preview" | "signedout" | "unavailable" }
-  | { mode: "pending" | "blocked"; me: Me }
+  | { mode: "pending" | "blocked" | "outside"; me: Me }
   | {
       mode: "cloud"
       me: Me

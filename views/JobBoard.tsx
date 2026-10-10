@@ -139,7 +139,7 @@ export default function JobBoard() {
     const out = jobs.filter((j) => {
       const c = coById(j.company)
       if (ql) {
-        const hay = [j.title, c.name, jobLocations(j).join(" "), j.summary, j.resp.join(" "), j.quals.join(" "), catById(j.category).label, j.term].join(" ").toLowerCase()
+        const hay = [j.title, c.name, jobLocations(j).join(" "), j.summary, j.resp.join(" "), j.quals.join(" "), catById(j.category).label, j.term, j.reqId || ""].join(" ").toLowerCase()
         if (!ql.split(/\s+/).every((w) => hay.includes(w))) return false
       }
       if (filters.company.length && !filters.company.includes(j.company)) return false

@@ -139,6 +139,7 @@ export function JobDialog({
     ["Term", job.term],
     ["Work mode", job.mode],
     ["Pay", job.pay || "None listed"],
+    ...(job.reqId ? ([["Job ID", <span key="rid" className="font-mono text-[0.92em]">{job.reqId}</span>]] as [string, React.ReactNode][]) : []),
   ]
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>

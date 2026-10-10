@@ -358,6 +358,61 @@ def jsonld_pay(jp: dict) -> str:
     return amt + (f" per {unit.lower()}" if unit else "")
 
 
+_STATES = {
+    "alabama": "AL", "alaska": "AK", "arizona": "AZ", "arkansas": "AR", "california": "CA", "colorado": "CO",
+    "connecticut": "CT", "delaware": "DE", "district of columbia": "DC", "florida": "FL", "georgia": "GA",
+    "hawaii": "HI", "idaho": "ID", "illinois": "IL", "indiana": "IN", "iowa": "IA", "kansas": "KS", "kentucky": "KY",
+    "louisiana": "LA", "maine": "ME", "maryland": "MD", "massachusetts": "MA", "michigan": "MI", "minnesota": "MN",
+    "mississippi": "MS", "missouri": "MO", "montana": "MT", "nebraska": "NE", "nevada": "NV", "new hampshire": "NH",
+    "new jersey": "NJ", "new mexico": "NM", "new york": "NY", "north carolina": "NC", "north dakota": "ND",
+    "ohio": "OH", "oklahoma": "OK", "oregon": "OR", "pennsylvania": "PA", "puerto rico": "PR", "rhode island": "RI",
+    "south carolina": "SC", "south dakota": "SD", "tennessee": "TN", "texas": "TX", "utah": "UT", "vermont": "VT",
+    "virginia": "VA", "washington": "WA", "west virginia": "WV", "wisconsin": "WI", "wyoming": "WY",
+}
+_CODES = set(_STATES.values())
+_US = re.compile(r"^(us|usa|u\.s\.a?\.?|united states( of america)?)$", re.I)
+
+
+def _state(s: str) -> str | None:
+    t = s.strip()
+    if len(t) == 2 and t.upper() in _CODES:
+        return t.upper()
+    return _STATES.get(t.lower())
+
+
+def normalize_location(raw: str) -> str:
+    """Career-site location formats -> the board's "City, ST" form (same rules as lib/locations.ts):
+    "US - New Jersey - Rahway" -> "Rahway, NJ"; "Redwood City, California, United States" -> "Redwood City, CA";
+    "Columbus, United States, Ohio" -> "Columbus, OH"; "North Chicago IL" -> "North Chicago, IL";
+    "United States - Remote" -> "Remote (US)"; "Germany - Ingelheim" -> "Ingelheim, Germany". Else unchanged."""
+    loc = clean(raw)
+    if not loc:
+        return loc
+    if re.search(r"\bremote\b", loc, re.I) and (re.search(r"\b(us|usa|united states)\b", loc, re.I) or loc.lower() == "remote"):
+        return "Remote (US)"
+    dashed = [clean(x) for x in re.split(r"\s+-\s+|\s*–\s*", loc) if clean(x)]
+    parts = dashed if len(dashed) >= 2 else ([clean(x) for x in loc.split("-")] if re.match(r"^(US|USA)-[A-Za-z]{2}-", loc) else dashed)
+    if len(parts) >= 3 and _US.match(parts[0]) and _state(parts[1]):
+        return f"{parts[2]}, {_state(parts[1])}"
+    if len(parts) == 2 and _US.match(parts[0]):
+        return parts[1]
+    if len(parts) >= 2 and not _US.match(parts[0]) and "," not in loc and re.fullmatch(r"[A-Za-z .'()]+", parts[0]):
+        return f"{parts[-1]}, {parts[0]}"
+    c = [clean(x) for x in loc.split(",") if clean(x)]
+    if len(c) >= 2:
+        if _state(c[1]) and (len(c) == 2 or _US.match(c[2])):
+            return f"{c[0]}, {_state(c[1])}"
+        if len(c) == 3 and _US.match(c[1]) and _state(c[2]):
+            return f"{c[0]}, {_state(c[2])}"
+        if len(c) == 2 and _US.match(c[1]):
+            return c[0]
+        return loc
+    m = re.match(r"^(.+?)\s+([A-Za-z]{2})$", loc)
+    if m and m.group(2).upper() in _CODES and re.search(r"[a-z]", m.group(1)):
+        return f"{m.group(1)}, {m.group(2).upper()}"
+    return loc
+
+
 def posted_to_date(text: str, today: date | None = None) -> str:
     """Workday's "Posted 3 Days Ago" / "Posted Today" / "Posted 30+ Days Ago" -> YYYY-MM-DD."""
     today = today or date.today()
@@ -813,7 +868,7 @@ def to_import_record(p: Posting) -> dict:
         "key": posting_key(p),
         "title": p.title,
         "company": COMPANIES.get(p.company, {}).get("id", p.company),
-        "locations": [x for x in dict.fromkeys(p.locations or [p.location]) if x],
+        "locations": [x for x in dict.fromkeys(normalize_location(l) for l in (p.locations or [p.location])) if x],
         "category": guess_category(p.title, p.description),
         "deadline": p.deadline,
         "first_seen": posted_to_date(p.posted) or date.today().isoformat(),
@@ -821,6 +876,7 @@ def to_import_record(p: Posting) -> dict:
         "mode": guess_mode(p),
         "pay": p.pay,
         "url": p.url,
+        "req_id": p.req_id,
         "description": first_sentences(p.description),
         "responsibilities": sec["resp"],
         "qualifications": sec["quals"],

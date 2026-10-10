@@ -32,6 +32,7 @@ export const jobSchema = z.object({
   mode: text(60),
   pay: text(200),
   url: httpUrl,
+  reqId: text(64).optional(),
   summary: text(20000),
   resp: z.array(text(2000)).max(60),
   quals: z.array(text(2000)).max(60),
@@ -60,6 +61,7 @@ export function toJob(r: Posting): Job {
     id: r.id, title: r.title, company: r.company, location: r.location, locations: r.locations,
     category: r.category, posted: toDay(r.posted), deadline: toDay(r.deadline), term: r.term, mode: r.mode,
     pay: r.pay, url: r.url, summary: r.summary, resp: r.resp, quals: r.quals,
+    ...(r.reqId ? { reqId: r.reqId } : {}),
     ...(r.sample ? { sample: true } : {}),
     ...(r.closed ? { closed: true } : {}),
     ...(r.addedAt ? { addedAt: r.addedAt.getTime() } : {}),
@@ -72,7 +74,7 @@ function fields(j: Job) {
     title: j.title, company: j.company, location: j.location || j.locations?.[0] || "",
     locations: j.locations?.length ? j.locations : [j.location].filter(Boolean),
     category: j.category, posted: fromDay(j.posted), deadline: j.deadline ? fromDay(j.deadline) : null,
-    term: j.term, mode: j.mode, pay: j.pay, url: j.url, summary: j.summary, resp: j.resp, quals: j.quals,
+    term: j.term, mode: j.mode, pay: j.pay, url: j.url, reqId: (j.reqId || "").trim(), summary: j.summary, resp: j.resp, quals: j.quals,
     closed: !!j.closed, sample: !!j.sample, addedAt: j.addedAt ? new Date(j.addedAt) : null,
   }
 }

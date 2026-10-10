@@ -17,7 +17,8 @@ if (/neon\.tech/.test(url)) throw new Error("TEST_DATABASE_URL must not be a Neo
 process.env.DATABASE_URL = url
 process.env.NEON_AUTH_BASE_URL = "https://auth.invalid"
 process.env.NEON_AUTH_COOKIE_SECRET = "x".repeat(40)
-process.env.ALLOWED_EMAIL_DOMAINS = "school.edu"
+process.env.SIGN_IN_EMAIL_DOMAINS = "school.edu,program.org,gmail.com"
+process.env.AUTO_APPROVE_EMAIL_DOMAINS = "school.edu"
 process.env.SCRAPER_INGEST_TOKEN = "t".repeat(48)
 
 type FakeUser = { id: string; email: string; emailVerified: boolean; name: string }
@@ -32,6 +33,9 @@ const A = await import("../lib/actions")
 const P = await import("../lib/people-actions")
 const { db } = await import("../lib/server/db")
 const { POST: ingest } = await import("../app/api/ingest/route")
+const authRoute = await import("../app/api/auth/[...path]/route")
+const openRoute = await import("../app/api/ingest/open/route")
+const closeRoute = await import("../app/api/ingest/close/route")
 const prisma = db()
 
 const job = (id: string, extra: Record<string, unknown> = {}) => ({
@@ -98,6 +102,30 @@ describe("signing in", () => {
     assert.equal(r.mode, "cloud")
     if (r.mode === "cloud") assert.equal(r.me.role, "staff")
     assert.equal(await prisma.accessGrant.count(), 0)
+  })
+
+  it("addresses outside the sign-in domains get nothing, and no profile is kept", async () => {
+    const stranger = user("u-yahoo", "someone@yahoo.com")
+    as(stranger)
+    assert.equal((await A.loadState()).mode, "outside")
+    await rejects(A.setStatus(["x"], "saved"))
+    await rejects(A.addReport({ id: "i9", kind: "x", jobId: "", details: "", email: "", date: "2026-10-09" }))
+    assert.equal(await prisma.profile.count({ where: { id: stranger.id } }), 0)
+  })
+
+  it("the auth route only serves allowed domains and refuses social sign-in, magic links and email changes", async () => {
+    const call = (path: string, body: unknown) =>
+      authRoute.POST(new Request("http://localhost/api/auth/" + path, { method: "POST", body: JSON.stringify(body), headers: { "content-type": "application/json" } }),
+        { params: Promise.resolve({ path: path.split("/") }) })
+    assert.equal((await call("email-otp/send-verification-otp", { email: "someone@yahoo.com", type: "sign-in" })).status, 403)
+    assert.equal((await call("sign-in/email-otp", { email: "someone@yahoo.com", otp: "123456" })).status, 403)
+    assert.equal((await call("email-otp/send-verification-otp", { email: "alice@school.edu", type: "change-email" })).status, 400)
+    assert.equal((await call("sign-in/email", { email: "someone@yahoo.com", password: "x" })).status, 403)
+    assert.equal((await call("sign-up/email", { email: "someone@yahoo.com", password: "longenough", name: "x" })).status, 403)
+    assert.equal((await call("email-otp/reset-password", { email: "someone@yahoo.com", otp: "1", password: "x" })).status, 403)
+    assert.equal((await call("sign-in/social", { provider: "google" })).status, 404)
+    assert.equal((await call("sign-in/magic-link", { email: "alice@school.edu" })).status, 404)
+    assert.equal((await call("email-otp/request-email-change", { email: "alice@school.edu", newEmail: "a@yahoo.com" })).status, 404)
   })
 
   it("blocked accounts are refused", async () => {
@@ -217,6 +245,7 @@ describe("staff provisioning", () => {
     assert.equal((await prisma.profile.findUnique({ where: { id: outsider.id } }))?.status, "active")
     await rejects(P.setAccess(outsider.id, { role: "staff" }))
     await rejects(P.invite("new@program.org", "staff"))
+    await assert.rejects(P.invite("someone@yahoo.com", "student"), /can sign in/)
     await rejects(P.setAccess(admin.id, { status: "blocked" }))
     await P.invite("newstudent@gmail.com", "student")
     assert.equal(await prisma.accessGrant.count({ where: { email: "newstudent@gmail.com" } }), 1)
@@ -300,3 +329,56 @@ describe("scraper ingest", () => {
     assert.equal(await prisma.posting.count({ where: { state: "review" } }), 2)
   })
 })
+
+describe("job IDs, locations and the open/closed check", () => {
+  before(wipe)
+  const token = () => process.env.SCRAPER_INGEST_TOKEN!
+  const ingestJson = (rows: unknown[]) =>
+    ingest(new Request("http://localhost/api/ingest?reviewAll=0", { method: "POST", body: JSON.stringify(rows), headers: { authorization: "Bearer " + token() } }))
+  const base = {
+    company: "Amgen", category: "Tech", first_seen: "2026-10-01", description: "z".repeat(120),
+    responsibilities: ["Train models"], qualifications: ["Python"],
+  }
+
+  it("saves the job ID and cleans up Workday-style locations", async () => {
+    const r = await ingestJson([{ ...base, title: "Data Science Intern", req_id: "R-111", locations: ["US - California - Thousand Oaks", "United States - Remote"],
+      url: "https://amgen.wd1.myworkdayjobs.com/Careers/job/US-California-Thousand-Oaks/Data-Science-Intern_R-111" }])
+    assert.equal((await r.json()).added, 1)
+    const row = await prisma.posting.findFirst({ where: { reqId: "R-111" } })
+    assert.ok(row)
+    assert.deepEqual(row!.locations, ["Thousand Oaks, CA", "Remote (US)"])
+  })
+
+  it("recognises a posting by its job ID even when the title and link change", async () => {
+    const r = await ingestJson([{ ...base, title: "Data Science Intern (Summer 2027)", req_id: "R-111", locations: ["US - California - Thousand Oaks"],
+      url: "https://amgen.wd1.myworkdayjobs.com/en-US/Careers/job/US-California-Thousand-Oaks/Data-Science-Intern-Summer-2027_R-111" }])
+    const body = await r.json()
+    assert.equal(body.updated, 1)
+    assert.equal(body.added + body.staged, 0)
+    assert.equal(await prisma.posting.count({ where: { reqId: "R-111" } }), 1)
+  })
+
+  it("treats the same title with a different job ID as a different posting", async () => {
+    const r = await ingestJson([{ ...base, title: "Data Science Intern (Summer 2027)", req_id: "R-222", locations: ["US - Massachusetts - Cambridge"],
+      url: "https://amgen.wd1.myworkdayjobs.com/Careers/job/US-Massachusetts-Cambridge/Data-Science-Intern_R-222" }])
+    assert.equal((await r.json()).added, 1)
+  })
+
+  it("lists open postings and marks the closed ones taken down, with the token only", async () => {
+    const list = (t?: string) => openRoute.GET(new Request("http://localhost/api/ingest/open", { headers: t ? { authorization: "Bearer " + t } : {} }))
+    assert.equal((await list()).status, 401)
+    const open = (await (await list(token())).json()).postings as { id: string; reqId: string; url: string }[]
+    assert.equal(open.length, 2)
+    assert.ok(open.every((p) => p.reqId && p.url))
+    const close = (body: unknown, t = token()) =>
+      closeRoute.POST(new Request("http://localhost/api/ingest/close", { method: "POST", body: JSON.stringify(body), headers: { authorization: "Bearer " + t } }))
+    assert.equal((await close({ ids: [open[0].id] }, "wrong")).status, 401)
+    assert.equal((await close({ ids: ["../x"] })).status, 400)
+    const out = await (await close({ ids: [open[0].id], reasons: { [open[0].id]: "Workday detail answered 404" } })).json()
+    assert.equal(out.closed, 1)
+    assert.equal((await prisma.posting.findUnique({ where: { id: open[0].id } }))?.closed, true)
+    assert.equal((await (await list(token())).json()).postings.length, 1)
+    assert.equal(await prisma.auditLog.count({ where: { action: "postings.check-closed" } }), 1)
+  })
+})
+

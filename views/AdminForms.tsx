@@ -25,8 +25,8 @@ export type FormAction = "save" | "hold" | "approve"
 export function JobForm({ job, open, onOpenChange, onSave, inReview = false }: { job: Job | null; open: boolean; onOpenChange: (o: boolean) => void; onSave: (j: Partial<Job>, action: FormAction) => void; inReview?: boolean }) {
   const action = useRef<FormAction>("save")
   const init = (): FormState => {
-    const v = job || { title: "", company: COMPANIES[0].id, location: COMPANIES[0].hq, category: "discovery" as CatId, posted: iso(TODAY), deadline: iso(addDays(TODAY, 30)), term: "Summer " + (TODAY.getFullYear() + 1), mode: "Onsite", pay: "", url: "", summary: "", resp: [], quals: [] }
-    return { ...v, location: job ? jobLocations(job).join("\n") : v.location, resp: v.resp.join("\n"), quals: v.quals.join("\n"), rolling: !v.deadline, deadline: v.deadline || iso(addDays(TODAY, 30)) }
+    const v = job || { title: "", company: COMPANIES[0].id, location: COMPANIES[0].hq, category: "discovery" as CatId, posted: iso(TODAY), deadline: iso(addDays(TODAY, 30)), term: "Summer " + (TODAY.getFullYear() + 1), mode: "Onsite", pay: "", url: "", reqId: "", summary: "", resp: [], quals: [] }
+    return { ...v, reqId: v.reqId || "", location: job ? jobLocations(job).join("\n") : v.location, resp: v.resp.join("\n"), quals: v.quals.join("\n"), rolling: !v.deadline, deadline: v.deadline || iso(addDays(TODAY, 30)) }
   }
   const [f, setF] = useState<FormState>(init)
   const [err, setErr] = useState("")
@@ -49,7 +49,7 @@ export function JobForm({ job, open, onOpenChange, onSave, inReview = false }: {
     }
     onSave({
       title: f.title.trim(), company: f.company, location: locs[0], locations: locs, category: f.category, mode: f.mode, posted: f.posted,
-      deadline: f.rolling ? "" : f.deadline, term: f.term.trim(), pay: f.pay.trim(), url: url || coById(f.company).site, summary: f.summary.trim(),
+      deadline: f.rolling ? "" : f.deadline, term: f.term.trim(), pay: f.pay.trim(), url: url || coById(f.company).site, reqId: (f.reqId || "").trim() || undefined, summary: f.summary.trim(),
       resp: f.resp.split("\n").map((s) => s.trim()).filter(Boolean), quals: f.quals.split("\n").map((s) => s.trim()).filter(Boolean), sample: false,
       closed: f.closed || undefined, addedAt: job?.addedAt ?? Date.now(),
     }, action.current)
@@ -99,7 +99,8 @@ export function JobForm({ job, open, onOpenChange, onSave, inReview = false }: {
             <div className="flex flex-col gap-1.5"><L htmlFor="jterm">Term</L><Input id="jterm" value={f.term} onChange={(e) => set({ term: e.target.value })} /></div>
             <div className="flex flex-col gap-1.5"><L htmlFor="jpay">Pay</L><Input id="jpay" value={f.pay} placeholder="$40–$50/hr" onChange={(e) => set({ pay: e.target.value })} /></div>
             <div className="flex items-center gap-2 sm:col-span-2"><Switch id="jclosed" checked={!!f.closed} onCheckedChange={(c) => set({ closed: c })} /><Label htmlFor="jclosed" className="text-sm font-normal">Taken down early (hide from students as expired)</Label></div>
-            <div className="flex flex-col gap-1.5 sm:col-span-2"><L htmlFor="ju">Posting link</L><Input id="ju" value={f.url} placeholder="https://" onChange={(e) => set({ url: e.target.value })} /></div>
+            <div className="flex flex-col gap-1.5"><L htmlFor="ju">Posting link</L><Input id="ju" value={f.url} placeholder="https://" onChange={(e) => set({ url: e.target.value })} /></div>
+            <div className="flex flex-col gap-1.5"><L htmlFor="jrid">Job ID</L><Input id="jrid" value={f.reqId || ""} placeholder="e.g. R-254668" maxLength={64} onChange={(e) => set({ reqId: e.target.value })} /></div>
             <div className="flex flex-col gap-1.5 sm:col-span-2"><L htmlFor="js">Description</L><Textarea id="js" rows={3} value={f.summary} onChange={(e) => set({ summary: e.target.value })} /></div>
             <div className="flex flex-col gap-1.5 sm:col-span-2"><L htmlFor="jresp">Responsibilities, one per line</L><Textarea id="jresp" rows={4} value={f.resp} onChange={(e) => set({ resp: e.target.value })} /></div>
             <div className="flex flex-col gap-1.5 sm:col-span-2"><L htmlFor="jq">Qualifications, one per line</L><Textarea id="jq" rows={3} value={f.quals} onChange={(e) => set({ quals: e.target.value })} /></div>
@@ -213,7 +214,7 @@ export function ImportDialog({ open, onOpenChange }: { open: boolean; onOpenChan
           </div>
           <Textarea aria-label="Scraper output" rows={7} value={text} onChange={(e) => { setText(e.target.value); setFileName("") }} placeholder='[{"title": "Machine Learning Intern", "company": "Genentech", "locations": ["South San Francisco, CA"], "deadline": "2026-11-15", "url": "https://…"}]' className="text-xs" />
           <p className="text-xs text-muted-foreground">
-            Columns: title, company, locations (separate with ;), category, deadline (YYYY-MM-DD, blank for rolling), first_seen, term, mode, pay, url, description, responsibilities and qualifications (separate with |). Postings are matched to existing ones by link, or by title and company.
+            Columns: title, company, locations (separate with ;), category, deadline (YYYY-MM-DD, blank for rolling), first_seen, term, mode, pay, url, req_id (the company&apos;s job ID), description, responsibilities and qualifications (separate with |). Postings are matched to existing ones by company and job ID, then by link, then by title and company.
           </p>
           <div className="flex items-center gap-2">
             <Switch id="reviewall" checked={reviewAll} onCheckedChange={setReviewAll} />

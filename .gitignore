@@ -55,3 +55,4 @@ __pycache__/
 # Claude Code: settings, skills and agents stay on each person's machine
 /.claude/
 /claude-code/
+.neon

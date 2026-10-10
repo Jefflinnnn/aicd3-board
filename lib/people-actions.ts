@@ -13,6 +13,7 @@ import { db } from "@/lib/server/db"
 import { Prisma } from "@/lib/generated/prisma/client"
 import { AccessError, audit, requireStaff } from "@/lib/server/access"
 import { isEmail } from "@/lib/validate"
+import { canSignIn, domainsLabel, signInDomains } from "@/lib/domains"
 import type { Invite, Person, Role } from "@/lib/types"
 
 const roleSchema = z.enum(["student", "staff", "admin"])
@@ -62,7 +63,7 @@ export async function setAccess(userId: string, patch: { role?: Role; status?: "
     if (!t) throw new Error("That person wasn't found.")
     const touchesStaff = t.role !== "student" || (role && role !== "student")
     if (touchesStaff && v.role !== "admin") throw new AccessError("forbidden")
-    if (role && role !== "student" && !t.emailVerified) throw new Error("That account's email isn't verified, so it can't be made staff. Ask them to sign in with Google.")
+    if (role && role !== "student" && !t.emailVerified) throw new Error("That account's email isn't verified, so it can't be made staff. Ask them to sign in with an email code first.")
     if (t.role === "admin" && t.status === "active" && ((role && role !== "admin") || (status && status !== "active"))) await assertAdminsRemain(tx, id)
     await tx.profile.update({ where: { id }, data: { ...(role ? { role } : {}), ...(status ? { status } : {}) } })
     return t
@@ -89,6 +90,7 @@ export async function invite(emailRaw: string, roleRaw: Role) {
   const email = emailSchema.parse(emailRaw)
   const role = roleSchema.parse(roleRaw)
   if (role !== "student" && v.role !== "admin") throw new AccessError("forbidden")
+  if (!canSignIn(email)) throw new Error(`Only ${domainsLabel(signInDomains())} addresses can sign in, so this invite could never be used.`)
   // Only accounts whose provider verified this address get access now. Anyone else holding the
   // address unverified gets nothing; the invite waits for a verified sign-in.
   const existing = (await db().profile.findMany({ where: { email } })).filter((p) => p.emailVerified && p.id !== v.id)

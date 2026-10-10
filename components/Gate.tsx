@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button"
 import { useApp } from "@/lib/state"
 
 /** Full-page states shown before (or instead of) the data: loading, signed out, nothing posted yet. */
-export function Gate({ kind }: { kind: "loading" | "signedout" | "empty" | "pending" | "blocked" | "unavailable" }) {
+export function Gate({ kind }: { kind: "loading" | "signedout" | "empty" | "pending" | "blocked" | "outside" | "unavailable" }) {
   if (kind === "loading")
     return (
       <div className="flex flex-col gap-5" aria-busy="true" aria-label="Loading postings">
@@ -23,7 +23,7 @@ export function Gate({ kind }: { kind: "loading" | "signedout" | "empty" | "pend
         Your session ended. Taking you to the sign-in page…
       </Card>
     )
-  if (kind === "pending" || kind === "blocked") return <Waiting blocked={kind === "blocked"} />
+  if (kind === "pending" || kind === "blocked" || kind === "outside") return <Waiting kind={kind} />
   if (kind === "unavailable")
     return (
       <Card icon={<CloudOff className="size-5" />} title="Can't load postings right now">
@@ -34,17 +34,20 @@ export function Gate({ kind }: { kind: "loading" | "signedout" | "empty" | "pend
   return <Empty />
 }
 
-function Waiting({ blocked }: { blocked: boolean }) {
+function Waiting({ kind }: { kind: "pending" | "blocked" | "outside" }) {
   const { me, signOut } = useApp()
+  const copy = {
+    pending: ["Waiting for approval", "Thanks for signing in. Program staff approve new accounts, usually within a day; this page will show the postings once you're approved."],
+    blocked: ["No access", "This account doesn't have access to the job board. If you think that's a mistake, contact the program team."],
+    outside: ["Use your UCSF email", "The job board is only open to UCSF email addresses. Sign out, then sign in with your @ucsf.edu address."],
+  }[kind]
   return (
-    <Card icon={blocked ? <ShieldX className="size-5" /> : <Hourglass className="size-5" />} title={blocked ? "No access" : "Waiting for approval"}>
-      {blocked
-        ? "This account doesn't have access to AICD3 Launchpad. If you think that's a mistake, contact the program team."
-        : "Thanks for signing in. Program staff approve new accounts, usually within a day; this page will show the postings once you're approved."}
+    <Card icon={kind === "pending" ? <Hourglass className="size-5" /> : <ShieldX className="size-5" />} title={copy[0]}>
+      {copy[1]}
       {me.email && <p className="mt-3">Signed in as <b className="font-medium text-foreground">{me.email}</b></p>}
       <div className="mt-4 flex gap-2">
-        {!blocked && <Button onClick={() => window.location.reload()}>Check again</Button>}
-        <Button variant="outline" onClick={signOut}>Use a different account</Button>
+        {kind === "pending" && <Button onClick={() => window.location.reload()}>Check again</Button>}
+        <Button variant={kind === "outside" ? "default" : "outline"} onClick={signOut}>{kind === "outside" ? "Sign out" : "Use a different account"}</Button>
       </div>
     </Card>
   )

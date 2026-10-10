@@ -27,6 +27,8 @@ export interface Job {
   mode: string
   pay: string
   url: string
+  /** The company's own job / requisition ID (e.g. "R-254668"), when known. */
+  reqId?: string
   summary: string
   resp: string[]
   quals: string[]
@@ -272,6 +274,18 @@ export const HOME_CITIES = [
   "San Francisco, CA", "San Diego, CA", "Los Angeles, CA", "Boston, MA", "New York, NY", "Seattle, WA", "Chicago, IL",
   "Philadelphia, PA", "Research Triangle Park, NC", "Indianapolis, IN", "Salt Lake City, UT", "Austin, TX",
 ]
+// pharma and biotech sites that scraped postings often list
+Object.assign(COORDS, {
+  "Lexington, MA": [42.45, -71.23], "Waltham, MA": [42.38, -71.24], "Bedford, MA": [42.49, -71.28], "Andover, MA": [42.66, -71.14],
+  "Devens, MA": [42.54, -71.61], "Princeton, NJ": [40.36, -74.66], "Lawrenceville, NJ": [40.3, -74.73], "New Brunswick, NJ": [40.49, -74.45],
+  "Summit, NJ": [40.72, -74.36], "Madison, NJ": [40.76, -74.42], "Bridgewater, NJ": [40.6, -74.65], "Morristown, NJ": [40.8, -74.48],
+  "Kenilworth, NJ": [40.68, -74.29], "Hopewell, NJ": [40.39, -74.76], "Collegeville, PA": [40.19, -75.45],
+  "King of Prussia, PA": [40.09, -75.38], "Swiftwater, PA": [41.1, -75.34], "Gaithersburg, MD": [39.14, -77.2], "Rockville, MD": [39.08, -77.15],
+  "Wilmington, DE": [39.74, -75.55], "North Chicago, IL": [42.33, -87.84], "Lake Forest, IL": [42.26, -87.84], "Ridgefield, CT": [41.28, -73.5],
+  "Pearl River, NY": [41.06, -74.02], "Kalamazoo, MI": [42.29, -85.59], "Redwood City, CA": [37.49, -122.24], "Brisbane, CA": [37.68, -122.4],
+  "Durham, NC": [35.99, -78.9], "Morrisville, NC": [35.82, -78.83], "Holly Springs, NC": [35.65, -78.83], "Sanford, NC": [35.48, -79.18],
+  "New Albany, OH": [40.08, -82.81], "Columbus, OH": [39.96, -83.0],
+})
 Object.assign(COORDS, {
   "San Francisco, CA": [37.77, -122.42], "Los Angeles, CA": [34.05, -118.24], "Seattle, WA": [47.61, -122.33],
   "Chicago, IL": [41.88, -87.63], "Philadelphia, PA": [39.95, -75.17], "Austin, TX": [30.27, -97.74],
