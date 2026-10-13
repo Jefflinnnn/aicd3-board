@@ -10,7 +10,8 @@
  * - pending / blocked: signed in, but staff haven't approved this account (or have blocked it).
  * - signedout: the session ended; the page goes to /auth/sign-in.
  * - preview: local development before `neon deploy` (no database or sign-in configured):
- *   sample data kept in this browser, as in the original MVP.
+ *   sample data kept in this browser, as in the original MVP. With `demo` (the public demo,
+ *   DEMO_MODE=1): made-up companies, and the visitor is a student, not an admin.
  * - unavailable: the server couldn't be reached or isn't configured.
  *
  * Writes update the screen straight away and are sent to the server one at a time, in order.
@@ -19,7 +20,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useRouter } from "next/navigation"
 import * as api from "./actions"
-import { BIN_DAYS, seedJobs, setCustomCategories, store, type BinItem, type Category, type CompanyRequest, type IssueReport, type Job, type StagedJob } from "./data"
+import { BIN_DAYS, seedJobs, setCustomCategories, store, switchToDemoCompanies, type BinItem, type Category, type CompanyRequest, type IssueReport, type Job, type StagedJob } from "./data"
 import { seedStaged, unstage } from "./review"
 import type { DashLayout, InboxDoc, LoadResult, Me, Meta, Mine, Mode, MyStatus } from "./types"
 
@@ -50,6 +51,7 @@ export function useBackend() {
   const [staged, stagedRef, setStagedS] = useLatest<StagedJob[]>([])
   const [meta, setMetaS] = useState<Meta>(EMPTY_META)
   const [mine, mineRef, setMineS] = useLatest<Mine>(EMPTY_MINE)
+  const [demo, setDemo] = useState(false)
   const [prevVisit, setPrevVisit] = useState<number | null>(null)
   const [myInbox, myInboxRef, setMyInbox] = useLatest<{ requests: CompanyRequest[]; reports: IssueReport[] }>({ requests: [], reports: [] })
   const [inbox, setInbox] = useState<InboxDoc[]>([])
@@ -62,11 +64,15 @@ export function useBackend() {
 
   /* ---------- load ---------- */
   /** Sample data in this browser (local development before Neon is set up). */
-  const startPreview = useCallback(() => {
+  const startPreview = useCallback((asDemo = false) => {
+    if (asDemo) {
+      switchToDemoCompanies()   // before anything reads the company list or browser storage
+      setDemo(true)
+    }
     const cats = store.get<Category[]>("cats", [])
     setCustomCategories(cats)
     setMetaS({ customCats: cats, lastUpdated: store.get<number | undefined>("lastUpdated", undefined) })
-    setJobsS(store.get<Job[] | null>("jobs", null) || seedJobs())
+    setJobsS(asDemo ? seedJobs() : store.get<Job[] | null>("jobs", null) || seedJobs())
     const cutoff = Date.now() - BIN_DAYS * 864e5
     setBinS(store.get<BinItem[]>("bin", []).filter((b) => b.deletedAt > cutoff))
     setStagedS(store.get<StagedJob[] | null>("review", null) || seedStaged())
@@ -76,7 +82,8 @@ export function useBackend() {
     store.set("mine", stamped)
     setMineS(stamped)
     setMyInbox(store.get("myInbox", { requests: [], reports: [] }))
-    setMe({ id: "local", canEdit: true, role: "admin", name: null, email: null })
+    setMe(asDemo ? { id: "demo", canEdit: false, role: "student", name: null, email: null }
+                 : { id: "local", canEdit: true, role: "admin", name: null, email: null })
     setLoaded({ jobs: true, mine: true })
     setMode("preview")
   }, [setBinS, setJobsS, setMineS, setMode, setMyInbox, setStagedS])
@@ -88,7 +95,7 @@ export function useBackend() {
       router.replace("/auth/sign-in")
       return
     }
-    if (r.mode === "preview") return startPreview()
+    if (r.mode === "preview") return startPreview(!!r.demo)
     if (r.mode !== "cloud") {
       setMode(r.mode)
       if ("me" in r) setMe(r.me)
@@ -349,7 +356,7 @@ export function useBackend() {
   }, [router])
 
   return {
-    mode, me, loaded, jobs, bin, staged, meta, mine, prevVisit, myInbox, allInbox, names, myName: me.name,
+    mode, demo, me, loaded, jobs, bin, staged, meta, mine, prevVisit, myInbox, allInbox, names, myName: me.name,
     saveJobs, moveToBin, saveStaged, dropStaged, approve, pullToReview, setReviewStatus, restore, deleteForever, setCustomCats, touchMeta,
     setStatus, setNote, setLayout, addRequest, addReport, resolveInbox, resetSample, signOut, reload,
   }

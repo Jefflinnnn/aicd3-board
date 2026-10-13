@@ -155,6 +155,19 @@ The scraper can also run on its own: `pip install -r scraper/requirements.txt`, 
 
 **Errors.** Every unhandled error in a page, route or server action is logged as one JSON line with `"event":"request-error"` (`instrumentation.ts`, no request bodies or cookies). Find them in Vercel under **Logs**, filtered by `request-error`; locally they print in the terminal.
 
+## Public demo
+
+A copy of the site anyone can open, to show the board to people outside UCSF: the same dashboard, job board and company pages with made-up postings from made-up companies (Company A, Company B…), no links out, and a banner saying it's a demo with a link to the real board. Visitors act as a student; what they save stays in their own browser. There's no sign-in, no Admin page, and `/api/*` answers 404.
+
+Deploy it as a **second Vercel project** from the same GitHub repo (e.g. `aicd3-demo`), with only these environment variables:
+
+```bash
+DEMO_MODE=1
+NEXT_PUBLIC_REAL_SITE_URL=https://your-real-site.vercel.app   # optional: the banner links here
+```
+
+Give it **no** database, Neon Auth or scraper variables. Even if some were set by mistake, demo mode never reads or writes the database (`tests/access.test.mts` checks this). Try it locally with `DEMO_MODE=1 pnpm dev`.
+
 ## Local development database
 
 Work locally against a **dev branch** of the Neon database, never production. A branch is a full copy of production's data made in seconds, so you can test edits, imports and refreshes without students seeing them. `pnpm dev` prints a warning if `.env.local` still points at production.

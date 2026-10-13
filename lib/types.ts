@@ -31,7 +31,8 @@ export interface Me {
 
 /** Everything the app needs on load, scoped to what this person may see. */
 export type LoadResult =
-  | { mode: "preview" | "signedout" | "unavailable" }
+  | { mode: "preview"; demo?: boolean }
+  | { mode: "signedout" | "unavailable" }
   | { mode: "pending" | "blocked" | "outside"; me: Me }
   | {
       mode: "cloud"

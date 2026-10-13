@@ -582,9 +582,11 @@ export default function JobBoard() {
                           <td className="px-2.5"><CatChip id={j.category} className="max-w-[9rem]" /></td>
                           <td className="px-2.5"><span className="whitespace-nowrap rounded-full bg-muted px-2 py-0.5 text-xs font-medium">{c.type}</span></td>
                           <td className="px-2" onClick={(e) => e.stopPropagation()}>
-                            <a href={j.url} target="_blank" rel="noopener noreferrer" aria-label={`Open posting for ${j.title} in a new tab`} className="inline-grid size-8 place-items-center rounded-md text-primary hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                              <ExternalLink className="size-4" />
-                            </a>
+                            {j.url && (
+                              <a href={j.url} target="_blank" rel="noopener noreferrer" aria-label={`Open posting for ${j.title} in a new tab`} className="inline-grid size-8 place-items-center rounded-md text-primary hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                                <ExternalLink className="size-4" />
+                              </a>
+                            )}
                           </td>
                         </tr>
                       )

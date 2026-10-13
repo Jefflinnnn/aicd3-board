@@ -48,14 +48,28 @@ function Logo() {
 const PAGE_LABEL: Record<string, string> = { dashboard: "Dashboard", jobs: "Job board", companies: "Company info", admin: "Admin", settings: "Settings" }
 const isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent)
 
+/** The public demo's notice: what this is, that the data is made up, and where the real board lives. */
+function DemoBanner() {
+  const real = process.env.NEXT_PUBLIC_REAL_SITE_URL
+  return (
+    <div role="note" className="border-b border-warn/30 bg-warn/10 px-4 py-2 text-center text-sm sm:px-6 lg:px-9">
+      <b className="font-semibold">Demo with example data.</b>{" "}
+      Every posting and company here (Company A, Company B…) is made up. The real AICD3 Job Board is for UCSF students
+      {real ? <>{" "}and needs a UCSF sign-in: <a href={real} className="font-medium text-primary underline-offset-2 hover:underline">{real.replace(/^https?:\/\//, "")}</a></> : "."}
+    </div>
+  )
+}
+
 /** Data freshness, the way Vercel and Baseten show deployment health: a coloured dot and a short label. */
-function SyncPill({ mode, updatedAt }: { mode: string; updatedAt?: number }) {
+function SyncPill({ mode, updatedAt, demo }: { mode: string; updatedAt?: number; demo?: boolean }) {
   const now = useNow()
   const stale = !updatedAt || now - updatedAt > 2 * 864e5
   const preview = mode === "preview"
   const tone = preview || stale ? "warn" : "good"
-  const label = preview ? "Sample data" : updatedAt ? `Updated ${ago(updatedAt)}` : "Not updated yet"
-  const tip = preview
+  const label = demo ? "Demo · example data" : preview ? "Sample data" : updatedAt ? `Updated ${ago(updatedAt)}` : "Not updated yet"
+  const tip = demo
+    ? "A demo of the AICD3 Job Board. Every posting and company here is made up; what you save stays in this browser."
+    : preview
     ? "No database is connected yet, so this site runs on sample postings saved in this browser only."
     : updatedAt ? `Postings last changed ${new Date(updatedAt).toLocaleString("en-US")}${stale ? ". Some may be out of date." : "."}` : "No postings have been loaded yet."
   return (
@@ -267,7 +281,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
   const initials = (backend.myName || (mode === "preview" ? "Guest" : isStaff ? "Staff" : "Student"))
     .split(/\s+/).map((w) => w[0]).join("").slice(0, 2).toUpperCase()
-  const roleLabel = isStaff ? (studentView ? "Staff, viewing as student" : backend.me.role === "admin" ? "Admin" : "Program staff") : mode === "pending" ? "Waiting for approval" : "Student"
+  const roleLabel = backend.demo ? "Demo visitor" : isStaff ? (studentView ? "Staff, viewing as student" : backend.me.role === "admin" ? "Admin" : "Program staff") : mode === "pending" ? "Waiting for approval" : "Student"
 
   const toggle = () => {
     const next = !collapsed
@@ -410,7 +424,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                 {studentView && <span className="ml-1 rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">Student view</span>}
               </nav>
               <div className="ml-auto flex items-center gap-2">
-                <SyncPill mode={mode} updatedAt={backend.meta.lastUpdated} />
+                <SyncPill mode={mode} updatedAt={backend.meta.lastUpdated} demo={backend.demo} />
                 <button
                   onClick={() => setCmdOpen(true)}
                   className="flex h-8 w-56 items-center gap-2 rounded-md border bg-card px-2.5 text-sm text-muted-foreground shadow-sm hover:border-input hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring max-md:w-8 max-md:justify-center max-md:px-0"
@@ -422,6 +436,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                 </button>
               </div>
             </header>
+            {backend.demo && <DemoBanner />}
             <div key={page + ":" + CATS.map((c) => c.id).join(",") + ":" + settings.home} className={cn(
                 "page-enter mx-auto w-full max-w-[1320px] px-4 pb-16 pt-6 transition-[opacity,transform] duration-150 ease-in sm:px-6 lg:px-9 lg:pt-7",
                 leaving && "-translate-y-1 opacity-0"

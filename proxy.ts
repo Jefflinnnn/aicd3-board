@@ -13,6 +13,12 @@ const OPEN = ["/api/ingest"]
 
 export default async function proxy(request: NextRequest) {
   const path = request.nextUrl.pathname
+  // The public demo (DEMO_MODE=1): open to anyone, made-up data only. No sign-in, no API.
+  if (process.env.DEMO_MODE === "1") {
+    if (path.startsWith("/api/")) return NextResponse.json({ error: "Not found" }, { status: 404 })
+    if (path.startsWith("/auth") || path.startsWith("/admin")) return NextResponse.redirect(new URL("/", request.url))
+    return NextResponse.next()
+  }
   if (OPEN.some((p) => path === p || path.startsWith(p + "/"))) return NextResponse.next()
   if (!authConfigured()) {
     // Local development before `neon deploy`: run on sample data in the browser.
