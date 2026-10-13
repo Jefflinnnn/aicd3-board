@@ -282,18 +282,17 @@
   z-index: -1;
   border-radius: inherit;
   opacity: 0;
-  transition: opacity 300ms ease;
+  transition: opacity 900ms ease;
   /* one glow centred on the pointer (--mx/--my) with a fading trail toward the lagging tail point
      (--tx/--ty); components/spotlight.ts sets them on every card the glow reaches, in that card's
      own coordinates, so the glow carries across neighbouring cards */
   background:
-    radial-gradient(110px circle at var(--mx, 50%) var(--my, 50%), hsl(var(--primary) / 0.11), transparent 70%),
-    radial-gradient(95px circle at calc(var(--mx, 50%) * 0.7 + var(--tx, 50%) * 0.3) calc(var(--my, 50%) * 0.7 + var(--ty, 50%) * 0.3), hsl(var(--primary) / 0.09), transparent 70%),
-    radial-gradient(80px circle at calc(var(--mx, 50%) * 0.4 + var(--tx, 50%) * 0.6) calc(var(--my, 50%) * 0.4 + var(--ty, 50%) * 0.6), hsl(var(--primary) / 0.07), transparent 70%),
-    radial-gradient(60px circle at var(--tx, 50%) var(--ty, 50%), hsl(var(--primary) / 0.05), transparent 70%);
+    radial-gradient(170px circle at var(--mx, 50%) var(--my, 50%), hsl(var(--primary) / 0.045), hsl(var(--primary) / 0.015) 45%, transparent 80%),
+    radial-gradient(130px circle at calc(var(--mx, 50%) * 0.6 + var(--tx, 50%) * 0.4) calc(var(--my, 50%) * 0.6 + var(--ty, 50%) * 0.4), hsl(var(--primary) / 0.03), transparent 75%),
+    radial-gradient(100px circle at var(--tx, 50%) var(--ty, 50%), hsl(var(--primary) / 0.02), transparent 75%);
   pointer-events: none;
 }
-.spotlight[data-glow]::before { opacity: 1; transition-duration: 60ms; } /* in fast, out slow */
+.spotlight[data-glow]::before { opacity: 1; transition-duration: 250ms; } /* in gently, out slowly; components/spotlight.ts drops it once the pointer rests */
 
 /* ---------- announcement pill with a travelling gradient border ---------- */
 @property --pill-angle { syntax: "<angle>"; initial-value: 0deg; inherits: false; }

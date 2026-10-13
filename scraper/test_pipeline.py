@@ -107,6 +107,16 @@ class Pipeline(unittest.TestCase):
         self.assertEqual(recs[0]["locations"], ["Foster City, CA"])
         self.assertEqual(recs[0]["company"], "gilead")
 
+    def test_undergrad_only_left_out(self):
+        mk = lambda t, d: pi.Posting(company="Gilead Sciences", title=t, url="https://x/" + t.replace(" ", "_"), description=d)
+        ps = [mk("Co-op - Machine Learning, Drug Discovery", "Build ML models for target discovery. Open to undergraduates."),
+              mk("Intern - Pharmacometrics", "Automate PK/PD modeling in Python. Currently pursuing a Bachelor's degree in data science."),
+              mk("Intern - Pharmacometrics ML", "Automate PK/PD modeling in Python. Currently enrolled in a PhD or PharmD program.")]
+        recs, report = pipeline.build_records(ps, c.Classifier("rules", cache_path=None))
+        self.assertEqual([r["decision"] for r in report][:2], ["undergrad", "undergrad"])
+        self.assertNotEqual(report[2]["decision"], "undergrad")
+        self.assertEqual([r.get("fit") for r in recs][:2], ["no", "no"])   # so the app bins any already listed
+
     def test_token_from_env_file(self):
         with tempfile.TemporaryDirectory() as d:
             with open(os.path.join(d, ".env.local"), "w") as f:

@@ -302,7 +302,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                     <TooltipContent side="right">Collapse sidebar</TooltipContent>
                   </Tooltip>
                   <span className="min-w-0 flex-1 truncate pl-1.5 text-[0.95rem] leading-none tracking-tight duration-200 animate-in fade-in">
-                    <b className="font-semibold text-sidebar-strong">AICD3</b> <span className="font-normal text-sidebar-fg">Launchpad</span>
+                    <b className="font-semibold text-sidebar-strong">AICD3</b> <span className="font-normal text-sidebar-fg">Job Board</span>
                   </span>
                   <Tooltip>
                     <TooltipTrigger asChild>
@@ -399,7 +399,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             {/* sticky top bar: where you are, how fresh the data is, and the ⌘K search */}
             <header className="sticky top-0 z-30 flex h-12 items-center gap-3 border-b border-border/70 bg-background/60 px-4 backdrop-blur-xl backdrop-saturate-150 sm:px-6 lg:px-9">
               <nav aria-label="Breadcrumb" className="flex min-w-0 items-center gap-1.5 text-sm">
-                <span className="hidden text-muted-foreground sm:inline">AICD3 Launchpad</span>
+                <span className="hidden text-muted-foreground sm:inline">AICD3 Job Board</span>
                 <ChevronRight className="hidden size-3.5 text-muted-foreground/60 sm:inline" />
                 <span className="truncate font-medium">{PAGE_LABEL[navPage]}</span>
                 {studentView && <span className="ml-1 rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">Student view</span>}

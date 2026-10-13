@@ -1,6 +1,6 @@
 export type CatId = string
 type SeedCat = "discovery" | "development" | "tech"
-export type CoType = "Large pharma" | "Mid-size biotech" | "Startup"
+export type CoType = "Large pharma" | "Mid-size biotech" | "Startup" | "Tech"
 
 export interface Company {
   id: string
@@ -107,7 +107,7 @@ export function setCustomCategories(custom: Category[]) {
   CATS.splice(0, CATS.length, ...BASE_CATS, ...custom.map((c) => ({ ...c, custom: true })))
 }
 export const catById = (id: string) => CATS.find((c) => c.id === id) || CATS.find((c) => c.id === "other") || CATS[0]
-export const TYPES: CoType[] = ["Large pharma", "Mid-size biotech", "Startup"]
+export const TYPES: CoType[] = ["Large pharma", "Mid-size biotech", "Startup", "Tech"]
 
 export const COMPANIES: Company[] = [
   { id: "genentech", name: "Genentech", type: "Large pharma", hq: "South San Francisco, CA", site: "https://www.gene.com", focus: [0.4, 0.35, 0.25], w: 5 },
@@ -131,6 +131,7 @@ export const COMPANIES: Company[] = [
   { id: "gsk", name: "GSK", type: "Large pharma", hq: "London, UK", site: "https://www.gsk.com", focus: [0.3, 0.5, 0.2], w: 0 },
   { id: "boehringer", name: "Boehringer Ingelheim", type: "Large pharma", hq: "Ingelheim, Germany", site: "https://www.boehringer-ingelheim.com", focus: [0.3, 0.5, 0.2], w: 0 },
   { id: "takeda", name: "Takeda", type: "Large pharma", hq: "Tokyo, Japan", site: "https://www.takeda.com", focus: [0.3, 0.5, 0.2], w: 0 },
+  { id: "nvidia", name: "NVIDIA", type: "Tech", hq: "Santa Clara, CA", site: "https://www.nvidia.com", focus: [0.4, 0.1, 0.5], w: 0 },
   { id: "revmed", name: "Revolution Medicines", type: "Mid-size biotech", hq: "Redwood City, CA", site: "https://www.revmed.com", focus: [0.5, 0.4, 0.1], w: 0 },
 ]
 export const coById = (id: string): Company =>
@@ -292,6 +293,25 @@ Object.assign(COORDS, {
   "Mettawa, IL": [42.24, -87.92], "Upper Merion, PA": [40.08, -75.38], "Upper Providence, PA": [40.16, -75.48],
   "New York City, NY": [40.71, -74.01], "Irvine, CA": [33.68, -117.83],
 })
+/** Bay Area cities by name, for sites without coordinates (the nine counties plus Santa Cruz). */
+const BAY_AREA_CITIES = new RegExp(
+  "^(san francisco|south san francisco|oakland|berkeley|emeryville|alameda|hayward|fremont|newark|union city|" +
+  "san leandro|pleasanton|dublin|livermore|walnut creek|concord|san ramon|richmond|brisbane|daly city|san bruno|" +
+  "burlingame|millbrae|san mateo|foster city|belmont|san carlos|redwood city|redwood shores|menlo park|" +
+  "palo alto|stanford|east palo alto|mountain view|los altos|sunnyvale|santa clara|cupertino|san jose|milpitas|" +
+  "campbell|los gatos|morgan hill|gilroy|novato|san rafael|sausalito|mill valley|petaluma|santa rosa|napa|" +
+  "vallejo|benicia|fairfield|vacaville|santa cruz|scotts valley), ca$", "i")
+const SF: [number, number] = [37.77, -122.42]
+/** True for a site in the San Francisco Bay Area: a known Bay Area city, or a California site within 60 miles of San Francisco. */
+export function isBayArea(loc: string): boolean {
+  if (BAY_AREA_CITIES.test(loc)) return true
+  const c = COORDS[loc]
+  if (!c || !/, CA$/.test(loc)) return false
+  const r = (d: number) => (d * Math.PI) / 180
+  const dLat = r(c[0] - SF[0]), dLon = r(c[1] - SF[1])
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(r(SF[0])) * Math.cos(r(c[0])) * Math.sin(dLon / 2) ** 2
+  return 3959 * 2 * Math.asin(Math.sqrt(a)) <= 60
+}
 /** [latitude, longitude] for a known site, or undefined. */
 export const cityCoord = (loc: string): [number, number] | undefined => COORDS[loc]
 let HOME: string = "San Francisco, CA"

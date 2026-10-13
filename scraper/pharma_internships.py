@@ -116,6 +116,12 @@ COMPANIES: dict[str, dict] = {
     "insitro":              {"id": "insitro", "platform": "ashby", "org": "insitro"},
     "Takeda":               {"id": "takeda", "platform": "workday", "boards": [("takeda", "wd502", "External")],
                              "alt_hosts": ["wd3"]},
+    # A tech company with hundreds of internships a year, most of them chips, graphics and systems:
+    # only keep the ones that mention healthcare or the life sciences ("require", on title + description).
+    "NVIDIA":               {"id": "nvidia", "platform": "workday", "boards": [("nvidia", "wd5", "NVIDIAExternalCareerSite")],
+                             "require": r"(?<![A-Za-z])(health\s?care|life sciences?|biolog\w*|bioinformatic\w*|biotech\w*|"
+                                        r"pharma\w*|drug|molecul\w*|protein\w*|genom\w*|chemistry|cheminformatic\w*|"
+                                        r"medical|medicine|clinical|biomedical|BioNeMo|Clara|MONAI|Parabricks)(?![A-Za-z])"},
 }
 
 # Titles that count as internships. Letter boundaries keep out "International"/"Internal"
@@ -287,6 +293,29 @@ class PoliteClient:
 # --------------------------------------------------------------------------------------
 def is_internship(title: str) -> bool:
     return bool(INTERN_RE.search(title or "")) and not NOT_INTERN_RE.search(title or "")
+
+
+# The board serves UCSF graduate and professional students, so postings only undergraduates (or high
+# schoolers) can take are left out. Co-ops in the US are undergraduate programmes unless they say otherwise.
+UNDERGRAD_TITLE_RE = re.compile(r"(?<![A-Za-z])(co[-\s]?op|undergrad(?:uate)?s?|bachelor'?s?|high[-\s]school)(?![A-Za-z])", re.I)
+UNDERGRAD_TEXT_RE = re.compile(
+    r"(?<![A-Za-z])(undergrad(?:uate)?s?|bachelor'?s?\s+(?:degree\s+)?(?:program|programme|student|candidate)|"
+    r"(?:pursuing|enrolled in|working toward)\s+(?:a\s+|an\s+|your\s+)?(?:b\.?s\.?|b\.?a\.?|bachelor'?s?)|"
+    r"rising\s+(?:sophomore|junior|senior)s?|sophomores?|freshm[ae]n|high[-\s]school\s+students?)(?![A-Za-z])", re.I)
+GRAD_RE = re.compile(
+    r"(?<![A-Za-z])((?<!under)graduate\s+(?:student|program|programme|degree|school|level|studies|candidate)s?|"
+    r"grad\s+students?|master'?s|masters|m\.s\.|ms\s+(?:student|degree|program|candidate)s?|ph\.?\s?d\.?s?|"
+    r"doctora(?:l|te)|pharm\.?\s?d\.?|m\.?d\.?/ph\.?d|mba|m\.?p\.?h\.?|professional\s+(?:school|degree)\s+students?|"
+    r"advanced\s+degree|post-?doc\w*)(?![A-Za-z])", re.I)
+
+
+def undergrad_only(title: str, description: str = "") -> bool:
+    """True for a posting only undergraduates (or high schoolers) can take: an undergraduate or co-op title,
+    or a description that asks for undergraduates, with no mention of graduate, PhD, PharmD, MD or MBA students."""
+    title, description = title or "", description or ""
+    if GRAD_RE.search(title) or GRAD_RE.search(description):
+        return False
+    return bool(UNDERGRAD_TITLE_RE.search(title) or UNDERGRAD_TEXT_RE.search(description))
 
 
 def clean(text: str | None) -> str:
@@ -1219,6 +1248,9 @@ def run(companies: list[str], details: bool, us_only: bool, client: PoliteClient
                     found = SCRAPERS[acfg["platform"]](c, name, acfg, details)
                     if us_only:
                         found = [p for p in found if is_us(p)]
+                    if cfg.get("require"):   # a company outside pharma: only postings on topic
+                        req = re.compile(cfg["require"], re.I)
+                        found = [p for p in found if req.search(f"{p.title}\n{p.description}")]
                     status[name] = f"ok ({len(found)}){via}"
                     log.info("   %s: %d internship postings%s", name, len(found), via)
                     return found

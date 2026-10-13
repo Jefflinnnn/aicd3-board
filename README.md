@@ -1,4 +1,4 @@
-# AICD3 Launchpad
+# AICD3 Job Board
 
 Internship postings from pharma, biotech and startup companies, tracked for AICD3 students: a dashboard, a filterable job board, company info, and a staff-only admin area with a review queue.
 
@@ -96,6 +96,8 @@ It needs the app running (`pnpm dev`, or `--url https://your-app`) and `SCRAPER_
 - **Which area?** Drug discovery (before clinical trials), drug development (during clinical trials), tech (not tied to a drug stage), or other. This becomes the posting's category.
 
 The classifier is [vllm-sr/d3-flash](https://huggingface.co/vllm-sr/d3-flash), a 9B decision model run locally with `transformers` (install the commented packages in `scraper/requirements.txt`; it needs an NVIDIA GPU or an Apple-silicon Mac with about 20 GB of free memory, and downloads about 17 GB on first use). The Admin page's **Set up d3-flash** button (or `bash scraper/setup_d3.sh` on a Mac or Linux, `powershell -ExecutionPolicy Bypass -File scraper\setup_d3.ps1` on Windows) does all of it in one go, on an Apple-silicon Mac or a PC with an NVIDIA GPU (20 GB or more): it builds a separate Python environment (`.venv-d3`), installs the packages, downloads the model, classifies a sample, and points the Refresh button at that environment (`SCRAPER_PYTHON` and a pinned `D3_REVISION` in `.env.local`). Docker isn't used for this because containers on a Mac can't reach its GPU. `python3 scraper/classify.py --check` loads the model and classifies one sample. If it can't load, the pipeline falls back to keyword rules and says so. Every run writes `scraper/out/pipeline/fit.csv` listing each posting, the decision and the confidence.
+
+**When a run fails.** Each run writes a full log to `scraper/out/logs/pipeline-<date>-<time>.log` (the last 30 are kept), whether it was started from the Admin page or a terminal. The log marks each stage (`[step] 1/4 scrape`, `2/4 classify`, `3/4 import`, `4/4 re-check open postings`) with how long it took, and ends with `[run] finished` or `[run] FAILED during step: …` and the reason. On the Admin page, every run has a **Log** link with its last 400 lines, and a failed run shows the reason under it. The app's terminal (`pnpm dev` / `pnpm start`) prints a `[refresh]` line when a run starts and ends, with the last lines of a failed one. A run that was going when the app restarted or closed is marked failed with "the app restarted or was closed while this run was going", because the run ends with the app. If re-checking open postings fails, the import before it is still saved and the run says so.
 
 ## Refreshing postings with Claude Code
 

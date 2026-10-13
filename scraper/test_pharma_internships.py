@@ -1,4 +1,5 @@
 """Offline tests: fixtures mirror real responses captured from the sites in Oct 2026."""
+import re
 import json
 import unittest
 
@@ -650,6 +651,15 @@ class NewCompanies(unittest.TestCase):
         for gone in ("Alnylam", "BioMarin", "Exelixis", "Arcus Biosciences", "Dyno Therapeutics"):
             self.assertNotIn(gone, pi.COMPANIES)
 
+    def test_nvidia_keeps_only_life_science_postings(self):
+        cfg = pi.COMPANIES["NVIDIA"]
+        self.assertEqual((cfg["platform"], cfg["id"], cfg["boards"][0][:3]), ("workday", "nvidia", ("nvidia", "wd5", "NVIDIAExternalCareerSite")))
+        req = re.compile(cfg["require"], re.I)
+        self.assertTrue(req.search("Deep Learning Intern, BioNeMo"))
+        self.assertTrue(req.search("Research Intern\nModels for drug discovery and protein design"))
+        self.assertTrue(req.search("Healthcare AI Intern"))
+        self.assertFalse(req.search("ASIC Verification Intern\nWrite testbenches for GPU memory controllers"))
+
     def test_talent_pool_postings_are_not_internships(self):
         self.assertFalse(pi.is_internship("Interested in an internship?"))   # Recursion's standing post
         self.assertTrue(pi.is_internship("Co-op, Cell Models and Molecular Biology"))
@@ -711,3 +721,24 @@ class Summaries(unittest.TestCase):
     def test_import_record_uses_it(self):
         p = pi.Posting(company="Amgen", title="Intern", description="About Amgen\nAmgen is a pioneer in biotech.\nThe Role\nYou will build ML models.")
         self.assertEqual(pi.to_import_record(p)["description"], "You will build ML models.")
+
+
+class UndergradOnly(unittest.TestCase):
+    def test_left_out(self):
+        for t, d in [("Co-op, Cell Models and Molecular Biology", "Six-month co-op."),
+                     ("2027 Undergraduate Summer Intern - Data Science", ""),
+                     ("Intern - Computational Biology", "Requirements: currently pursuing a B.S. in computer science."),
+                     ("Intern - Data Science", "Open to rising juniors and seniors."),
+                     ("Summer Intern - Bioinformatics", "Must be enrolled in an undergraduate program in biology."),
+                     ("High School Summer Intern", "")]:
+            self.assertTrue(pi.undergrad_only(t, d), t)
+
+    def test_kept(self):
+        for t, d in [("Co-op - ML Engineering", "Open to undergraduate and graduate students."),
+                     ("Intern - Computational Biology", "Currently pursuing a Bachelor's, Master's or Ph.D. in biology."),
+                     ("PhD Intern - Machine Learning", ""),
+                     ("Intern - Pharmacometrics", "PharmD candidates or graduate students in pharmaceutical sciences."),
+                     ("Intern - Data Science", "Build models of clinical trial data."),          # says nothing about level
+                     ("Intern - Clinical Data", "Bachelor's degree required; MS degree preferred."),
+                     ("International Cooperation Intern", "Recent graduates welcome.")]:
+            self.assertFalse(pi.undergrad_only(t, d), t)

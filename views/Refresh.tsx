@@ -167,9 +167,20 @@ export function Refresh() {
   )
 }
 
+/** The line that says why a run failed: the pipeline's own "[run] FAILED…" / "Import failed…", else the last error-looking line. */
+function failureReason(log: string): string | null {
+  const lines = log.split("\n").map((l) => l.trim()).filter(Boolean)
+  const pick = (re: RegExp) => [...lines].reverse().find((l) => re.test(l))
+  const failed = pick(/^\[run\] (FAILED|STOPPED)/)
+  const why = pick(/^\[error\]|Import failed|^\[server\] (stopped|could not start)|Error:|Traceback/)
+  if (failed && why && why !== failed) return `${why.replace(/^\[(error|server)\] /, "")} (${failed.replace(/^\[run\] /, "").toLowerCase()})`
+  return (failed || why || null)?.replace(/^\[(run|error|server)\] /, "") ?? null
+}
+
 function RunRow({ run, detailed = false }: { run: RefreshRun; detailed?: boolean }) {
   const s = run.summary
   const d = s?.database
+  const reason = run.status === "failed" || run.status === "cancelled" ? failureReason(run.log || "") : null
   return (
     <div className="border-b py-2.5 last:border-b-0">
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
@@ -185,7 +196,7 @@ function RunRow({ run, detailed = false }: { run: RefreshRun; detailed?: boolean
       {s && d && (
         <p className="mt-1 text-sm text-muted-foreground">
           {s.scraped} US internships found: <b className="font-medium text-foreground">{d.added} new on the board</b>, {d.staged} sent to review,{" "}
-          {d.updated} updated, {d.closed} closed{d.dropped ? `, ${d.dropped} cleared from review` : ""}{d.unlisted ? `, ${d.unlisted} moved to the bin as no longer a fit` : ""}, {s.skip} left out as not ML/automation-focused
+          {d.updated} updated, {d.closed} closed{d.dropped ? `, ${d.dropped} cleared from review` : ""}{d.unlisted ? `, ${d.unlisted} moved to the bin as no longer a fit` : ""}, {s.skip} left out as not ML/automation-focused{s.undergrad ? `, ${s.undergrad} left out as undergraduate-only` : ""}
           {s.checked && `; re-check: ${s.checked.closed} taken down, ${s.checked.unknown} need a look`}.
           {detailed && ` Classifier: ${s.classifier === "d3" ? "d3-flash" : "keyword rules"}.`}
         </p>
@@ -193,8 +204,14 @@ function RunRow({ run, detailed = false }: { run: RefreshRun; detailed?: boolean
       {detailed && s?.failed?.length ? (
         <p className="mt-1 text-xs text-warn">Couldn&apos;t scrape: {s.failed.map((n) => `${n} (${s.companies[n]})`).join("; ")}</p>
       ) : null}
-      {detailed && (run.status === "failed" || (run.trigger === "setup" && run.status !== "running")) && run.log && (
-        <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap rounded-md bg-muted px-3 py-2 font-mono text-[0.72rem] text-muted-foreground">{run.log}</pre>
+      {reason && <p className="mt-1 text-xs text-warn"><AlertTriangle className="mr-1 inline size-3" />{reason}</p>}
+      {s?.checkError && <p className="mt-1 text-xs text-warn">Re-checking open postings stopped early ({s.checkError}); the import was still saved.</p>}
+      {run.status !== "running" && run.log && (
+        <details className="mt-1 text-xs" open={detailed && run.status === "failed"}>
+          <summary className="cursor-pointer text-muted-foreground hover:text-foreground">Log</summary>
+          <pre className="mt-1 max-h-72 overflow-auto whitespace-pre-wrap rounded-md bg-muted px-3 py-2 font-mono text-[0.72rem] leading-relaxed text-muted-foreground">{run.log}</pre>
+          <p className="mt-1 text-muted-foreground">The full log of each run is on the computer that ran it, in <code>scraper/out/logs/</code>.</p>
+        </details>
       )}
     </div>
   )

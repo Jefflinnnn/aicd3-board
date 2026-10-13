@@ -13,6 +13,8 @@ const securityHeaders = [
 
 const nextConfig: NextConfig = {
   poweredByHeader: false,
+  // the scraper's Python environments are run at runtime, never bundled
+  outputFileTracingExcludes: { "*": [".venv/**", ".venv-d3/**", "scraper/**/__pycache__/**"] },
   experimental: {
     // bulk imports from the Admin page send a few hundred postings in one call
     serverActions: { bodySizeLimit: "10mb" },

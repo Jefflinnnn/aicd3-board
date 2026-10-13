@@ -70,9 +70,13 @@ export interface RefreshRun {
     publish: number
     review: number
     skip: number
+    /** undergraduate-only roles and co-ops left out (runs before this was tracked lack it) */
+    undergrad?: number
     database: { added: number; staged: number; updated: number; closed: number; unchanged: number; rejected: number; dropped?: number; unlisted?: number }
     errors: number
     checked: { open: number; closed: number; unknown: number } | null
+    /** why re-checking open postings stopped, when it did (the import before it was still saved) */
+    checkError?: string | null
     companies: Record<string, string>
     failed: string[]
   } | null

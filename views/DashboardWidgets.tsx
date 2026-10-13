@@ -291,8 +291,13 @@ export function Arranger({ sections, order, hidden, editing, onChange }: { secti
   const els = useRef<Record<string, HTMLElement | null>>({})
   const tops = useRef<Record<string, number>>({})
   const [dragging, setDragging] = useState<string | null>(null)
+  // while dragging, the order lives here and is saved once on drop (not on every swap)
+  const [draft, setDraft] = useState<string[] | null>(null)
+  // no new swap until the last one has finished gliding, so moving sections can't swap straight back
+  const settleUntil = useRef(0)
   const byId = Object.fromEntries(sections.map((s) => [s.id, s]))
-  const visible = order.filter((id) => !hidden.includes(id) && byId[id])
+  const current = draft ?? order
+  const visible = current.filter((id) => !hidden.includes(id) && byId[id])
 
   // glide sections to their new places whenever the order changes (FLIP)
   useLayoutEffect(() => {
@@ -319,13 +324,26 @@ export function Arranger({ sections, order, hidden, editing, onChange }: { secti
     ;[o[a], o[b]] = [o[b], o[a]]
     onChange(o, hidden)
   }
-  const dragOver = (overId: string) => {
-    if (!dragging || dragging === overId) return
-    const o = order.filter((x) => x !== dragging)
-    const at = o.indexOf(overId)
-    const from = order.indexOf(dragging), to = order.indexOf(overId)
-    o.splice(from < to ? at + 1 : at, 0, dragging)
-    onChange(o, hidden)
+  const dragOver = (overId: string, clientY: number) => {
+    if (!dragging || dragging === overId || performance.now() < settleUntil.current) return
+    const el = els.current[overId]
+    if (!el) return
+    // top half of a section: drop before it; bottom half: after it. Sections of very different
+    // heights then settle instead of swapping back and forth under the cursor.
+    const r = el.getBoundingClientRect()
+    const before = clientY < r.top + r.height / 2
+    const o = current.filter((x) => x !== dragging)
+    o.splice(o.indexOf(overId) + (before ? 0 : 1), 0, dragging)
+    if (o.every((x, k) => x === current[k])) return
+    settleUntil.current = performance.now() + 340
+    setDraft(o)
+  }
+  const ended = useRef(false)   // drop and dragend both fire; save once
+  const endDrag = () => {
+    if (!ended.current && draft && draft.some((x, k) => x !== order[k])) onChange(draft, hidden)
+    ended.current = true
+    setDraft(null)
+    setDragging(null)
   }
 
   return (
@@ -334,16 +352,16 @@ export function Arranger({ sections, order, hidden, editing, onChange }: { secti
         <div
           key={id}
           ref={(el) => { els.current[id] = el }}
-          onDragOver={(e) => { if (editing && dragging) { e.preventDefault(); dragOver(id) } }}
-          onDrop={(e) => { e.preventDefault(); setDragging(null) }}
+          onDragOver={(e) => { if (editing && dragging) { e.preventDefault(); e.dataTransfer.dropEffect = "move"; dragOver(id, e.clientY) } }}
+          onDrop={(e) => { e.preventDefault(); endDrag() }}
           className={cn("relative rounded-lg transition-[box-shadow,opacity] duration-200", editing && "outline-dashed outline-1 outline-offset-[6px] outline-border", dragging === id && "opacity-50")}
         >
           {editing && (
             <div className="mb-2 flex items-center gap-2 duration-200 animate-in fade-in slide-in-from-top-1">
               <span
                 draggable
-                onDragStart={(e) => { setDragging(id); e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", id) }}
-                onDragEnd={() => setDragging(null)}
+                onDragStart={(e) => { ended.current = false; setDragging(id); setDraft(order); e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", id) }}
+                onDragEnd={endDrag}
                 className="flex cursor-grab items-center gap-1.5 rounded-md border bg-card px-2 py-1 text-xs font-medium shadow-sm active:cursor-grabbing"
                 title="Drag to move"
               >

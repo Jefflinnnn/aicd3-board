@@ -7,7 +7,8 @@
  * that catches up and disappears when the pointer slows. Each card gets the head and tail in its own
  * coordinates (--mx/--my, --tx/--ty) and a data-glow attribute while in reach; app/globals.css draws it.
  */
-const REACH = 150 // px from the pointer (or its tail) within which a card draws its part of the glow
+const REACH = 190 // px from the pointer (or its tail) within which a card draws its part of the glow
+const REST_MS = 700 // the glow fades away once the pointer has been still this long, so it never sits there
 const TAIL_MS = 110 // the tail closes about 63% of the gap to the pointer every TAIL_MS
 
 let px = 0, py = 0 // pointer, viewport coordinates
@@ -16,6 +17,7 @@ let on = false
 let raf = 0
 let last = 0
 let root: HTMLElement | null = null
+let rest = 0
 const lit = new Set<HTMLElement>()
 
 const reduced = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches
@@ -69,10 +71,13 @@ export function spotlightMove(e: { clientX: number; clientY: number; pointerType
   }
   on = true
   schedule()
+  clearTimeout(rest)
+  rest = window.setTimeout(spotlightLeave, REST_MS)
 }
 
 /** onPointerLeave: the glow fades out where it is. */
 export function spotlightLeave() {
+  clearTimeout(rest)
   on = false
   if (raf) cancelAnimationFrame(raf)
   raf = 0

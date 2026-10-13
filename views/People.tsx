@@ -223,7 +223,7 @@ export function People({ flash }: { flash?: boolean }) {
           <DialogHeader className="text-left">
             <DialogTitle className="font-display text-xl">Remove {removing?.name || removing?.email}?</DialogTitle>
             <DialogDescription>
-              This deletes their saved and applied lists, notes, requests and reports from Launchpad and blocks the account. It can&apos;t be undone. You can unblock them later from the Blocked list; they start with nothing.
+              This deletes their saved and applied lists, notes, requests and reports from the job board and blocks the account. It can&apos;t be undone. You can unblock them later from the Blocked list; they start with nothing.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter className="gap-2">
