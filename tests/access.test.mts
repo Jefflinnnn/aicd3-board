@@ -601,3 +601,23 @@ describe("job data refresh", () => {
     }
   })
 })
+
+describe("public demo (DEMO_MODE=1)", () => {
+  // a demo deploy is meant to have no database settings at all; even if some were set by mistake,
+  // nothing real may be read or written
+  it("serves made-up data only, and refuses every server action and the scraper's door", async () => {
+    as(admin)   // even with a real staff session in the cookie
+    process.env.DEMO_MODE = "1"
+    try {
+      assert.deepEqual(await A.loadState(), { mode: "preview", demo: true })
+      await rejects(A.saveJobs([job("demo-1") as never]))
+      const r = await ingest(new Request("http://localhost/api/ingest", { method: "POST", body: "[]", headers: { authorization: "Bearer " + "t".repeat(48) } }))
+      assert.equal(r.status, 404)
+      const o = await openRoute.GET(new Request("http://localhost/api/ingest/open", { headers: { authorization: "Bearer " + "t".repeat(48) } }))
+      assert.equal(o.status, 404)
+    } finally {
+      delete process.env.DEMO_MODE
+    }
+    assert.equal(await prisma.posting.count({ where: { id: "demo-1" } }), 0)
+  })
+})

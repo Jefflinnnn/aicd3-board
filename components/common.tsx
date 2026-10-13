@@ -202,11 +202,13 @@ export function JobDialog({
           <Button variant="outline" onClick={() => onSetStatus(status === "applied" ? null : "applied")}>
             {status === "applied" ? <><Check className="size-4" /> Applied</> : "Mark as applied"}
           </Button>
-          <Button asChild>
-            <a href={job.url} target="_blank" rel="noopener noreferrer">
-              Open posting <ExternalLink className="size-4" />
-            </a>
-          </Button>
+          {job.url && (
+            <Button asChild>
+              <a href={job.url} target="_blank" rel="noopener noreferrer">
+                Open posting <ExternalLink className="size-4" />
+              </a>
+            </Button>
+          )}
         </div>
       </DialogContent>
     </Dialog>

@@ -13,6 +13,155 @@ import pipeline
 os.environ["AICD3_LOG_FILE"] = os.path.join(tempfile.mkdtemp(prefix="aicd3-test-logs-"), "pipeline-test.log")
 
 
+# Never reach Claude from the tests, even on a machine whose .env.local has the settings
+_no_llm = mock.patch.object(c, "llm_configured", return_value=False)
+
+
+def setUpModule():
+    _no_llm.start()
+
+
+def tearDownModule():
+    _no_llm.stop()
+
+
+class FakeBlock:
+    def __init__(self, data):
+        self.type, self.input = "tool_use", data
+
+
+class FakeClaude:
+    """Stands in for anthropic.AnthropicBedrock: records each call, answers with a tool_use block."""
+    def __init__(self, answer=None, fail=None):
+        self.answer, self.fail, self.calls = answer, fail, []
+        self.messages = self
+
+    def create(self, **kw):
+        self.calls.append(kw)
+        if self.fail:
+            raise self.fail
+        return mock.Mock(content=[FakeBlock(self.answer)])
+
+
+PKPD_ANSWER = {"computational": 0.93, "category": "development", "category_confidence": 0.9,
+               "reason": "Builds PK/PD models and automates simulation in Python.",
+               "summary": "Build population PK/PD models for Phase 2 trials in the Clinical Pharmacology team.",
+               "responsibilities": ["Build population PK/PD models in NONMEM", "Automate simulation workflows in Python"],
+               "qualifications": ["Pursuing a PhD or PharmD", "Experience with R or Python"]}
+
+
+class Claude(unittest.TestCase):
+    def test_one_call_gives_decision_reason_and_sections(self):
+        fake = FakeClaude(PKPD_ANSWER)
+        clf = c.Classifier("llm", cache_path=None, llm_client=fake)
+        v = clf.classify("2027 Summer Intern - Clinical Pharmacology Modeling", "Genentech", "Build PK/PD models...")
+        self.assertEqual((clf.name, v.backend, v.decision, v.category), ("llm", "llm", "publish", "development"))
+        self.assertEqual(v.resp[0], "Build population PK/PD models in NONMEM")
+        self.assertTrue(v.summary.startswith("Build population PK/PD models"))
+        call = fake.calls[0]
+        self.assertEqual(call["tool_choice"], {"type": "tool", "name": "record_assessment"})
+        self.assertIn("<posting>", call["messages"][0]["content"])   # the posting goes in as data
+        self.assertIn("claude-sonnet", call["model"])
+
+    def test_model_is_sonnet_5_or_claude_codes_sonnet_setting(self):
+        clean = {k: "" for k in ("AICD3_LLM_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL")}
+        with mock.patch.dict(os.environ, clean), mock.patch.object(c, "env", side_effect=lambda n: os.environ.get(n, "")):
+            self.assertEqual(c.LLM(client=FakeClaude(PKPD_ANSWER)).model, "us.anthropic.claude-sonnet-5")
+            with mock.patch.dict(os.environ, {"ANTHROPIC_DEFAULT_SONNET_MODEL": "us.anthropic.claude-sonnet-test"}):
+                self.assertEqual(c.LLM(client=FakeClaude(PKPD_ANSWER)).model, "us.anthropic.claude-sonnet-test")
+            with mock.patch.dict(os.environ, {"AICD3_LLM_MODEL": "us.anthropic.claude-opus-test", "ANTHROPIC_DEFAULT_SONNET_MODEL": "x"}):
+                self.assertEqual(c.LLM(client=FakeClaude(PKPD_ANSWER)).model, "us.anthropic.claude-opus-test")
+
+    def ucsf_llm(self):
+        env = {"AWS_ACCESS_KEY_ID": "id", "AWS_SECRET_ACCESS_KEY": "secret", "AWS_REGION": "us-west-2",
+               "ANTHROPIC_BEDROCK_BASE_URL": "https://unified-api.ucsf.edu/general/awsai"}
+        fake_sdk = mock.Mock()
+        with mock.patch.dict(os.environ, env), mock.patch.dict("sys.modules", {"anthropic": fake_sdk}):
+            return c.LLM()
+
+    def test_off_the_vpn_says_so_and_uses_rules(self):
+        import requests
+        with mock.patch("requests.get", side_effect=requests.exceptions.ConnectionError("Name or service not known")):
+            ok, why = self.ucsf_llm().reachable()
+        self.assertFalse(ok)
+        self.assertIn("unified-api.ucsf.edu", why)
+        self.assertIn("UCSF VPN", why)
+        with mock.patch("requests.get", side_effect=requests.exceptions.ConnectTimeout("timed out")):
+            self.assertIn("UCSF VPN", self.ucsf_llm().reachable()[1])
+        # auto: one clear warning, then keyword rules for the run (no per-posting failures)
+        llm = mock.Mock(model="m", needs_vpn=True, reachable=mock.Mock(return_value=(False, "couldn't connect. " + c.VPN_HINT)))
+        with mock.patch.object(c, "llm_configured", return_value=True), mock.patch.object(c, "LLM", return_value=llm), \
+                self.assertLogs("classify", "WARNING") as logs:
+            clf = c.Classifier("auto", cache_path=None)
+        self.assertEqual(clf.name, "rules")
+        self.assertTrue(any("UCSF VPN" in m for m in logs.output))
+        with mock.patch.object(c, "LLM", return_value=llm), self.assertRaises(ConnectionError):
+            c.Classifier("llm", cache_path=None)   # asked for Claude explicitly: fail loudly
+
+    def test_on_the_vpn_any_http_answer_counts(self):
+        with mock.patch("requests.get", return_value=mock.Mock(status_code=403)):
+            self.assertEqual(self.ucsf_llm().reachable(), (True, ""))
+
+    def test_connection_errors_mid_run_mention_the_vpn(self):
+        class APIConnectionError(Exception):
+            pass
+        clf = c.Classifier("llm", cache_path=None, llm_client=FakeClaude(fail=APIConnectionError("Connection error.")))
+        clf.llm.base_url = "https://unified-api.ucsf.edu/general/awsai"
+        with self.assertLogs("classify", "WARNING") as logs:
+            clf.classify("Data Science Intern", "Amgen", "Python")
+        self.assertIn("UCSF VPN", logs.output[0])
+
+    @unittest.skipUnless(__import__("importlib").util.find_spec("anthropic"), "anthropic isn't installed")
+    def test_bedrock_gateway_settings_reach_the_client(self):
+        env = {"AWS_ACCESS_KEY_ID": "id", "AWS_SECRET_ACCESS_KEY": "secret", "AWS_REGION": "us-west-2",
+               "ANTHROPIC_BEDROCK_BASE_URL": "https://gateway.example.edu/general/awsai"}
+        with mock.patch.dict(os.environ, env), mock.patch("anthropic.AnthropicBedrock") as bedrock:
+            m = c.LLM()
+        kw = bedrock.call_args.kwargs
+        self.assertEqual((kw["aws_access_key"], kw["aws_secret_key"], kw["aws_region"], kw["base_url"]),
+                         ("id", "secret", "us-west-2", "https://gateway.example.edu/general/awsai"))
+        self.assertIn("gateway.example.edu", m.via)
+
+    def test_odd_answers_are_clamped(self):
+        v = c.Classifier("llm", cache_path=None, llm_client=FakeClaude(
+            {**PKPD_ANSWER, "computational": 1.7, "category": "marketing", "responsibilities": ["", "a"] + ["b"] * 12})
+        ).classify("t", "c", "d")
+        self.assertEqual((v.computational, v.category, len(v.resp)), (1.0, "other", 8))
+
+    def test_failures_fall_back_to_rules_and_stop_trying_after_five(self):
+        fake = FakeClaude(fail=RuntimeError("403 from gateway"))
+        clf = c.Classifier("llm", cache_path=None, llm_client=fake)
+        got = [clf.classify(f"Data Science Intern {i}", "Amgen", "Python and SQL").backend for i in range(8)]
+        self.assertEqual(set(got), {"rules"})
+        self.assertEqual(len(fake.calls), 5)   # no more calls once it's clearly not working
+
+    def test_warm_classifies_in_parallel_and_caches(self):
+        fake = FakeClaude(PKPD_ANSWER)
+        clf = c.Classifier("llm", cache_path=None, llm_client=fake)
+        items = [(f"Intern {i}", "Genentech", f"text {i}") for i in range(10)]
+        clf.warm(items + items[:3])   # duplicates asked once
+        self.assertEqual(len(fake.calls), 10)
+        clf.classify(*items[0])
+        self.assertEqual(len(fake.calls), 10)   # answered from the cache
+
+    def test_pipeline_uses_claudes_sections_and_reason(self):
+        fake = FakeClaude({**PKPD_ANSWER, "computational": 0.5, "category": "discovery", "reason": "Mostly bench work with some modeling."})
+        clf = c.Classifier("llm", cache_path=None, llm_client=fake)
+        p = pi.Posting(company="Gilead Sciences", title="Intern - Translational Research Modeling", location="US, CA, Foster City",
+                       url="https://gilead.wd1.myworkdayjobs.com/x/job/y", description="What we need to see:\n• ...")
+        recs, report = pipeline.build_records([p], clf)
+        self.assertEqual(report[0]["decision"], "review")
+        self.assertEqual(recs[0]["qualifications"], PKPD_ANSWER["qualifications"])
+        self.assertEqual(recs[0]["description"], PKPD_ANSWER["summary"])
+        self.assertIn("Claude: Mostly bench work", recs[0]["review_reason"])
+
+    def test_auto_uses_claude_when_configured(self):
+        with mock.patch.object(c, "llm_configured", return_value=True), mock.patch.object(c, "LLM") as llm:
+            llm.return_value.model = "m"
+            llm.return_value.reachable.return_value = (True, "")
+            self.assertEqual(c.Classifier("auto", cache_path=None).name, "llm")
+
+
 class AnswerShapes(unittest.TestCase):
     """d3-flash's card doesn't pin down the answer format, so accept the plausible ones."""
 
@@ -23,6 +172,10 @@ class AnswerShapes(unittest.TestCase):
             self.assertAlmostEqual(c.p_yes(ans), 0.8, msg=repr(ans))
         with self.assertRaises(ValueError):
             c.p_yes({"maybe": 1.0})
+
+    def test_d3_noul_answer(self):
+        # what d3-flash actually returned for the "noul" (yes/no likelihood) question on 12 Oct 2026
+        self.assertAlmostEqual(c.p_yes({"type": "noul", "noul": 0.9906622951973657}), 0.9906622951973657)
 
     def test_choice(self):
         ans = {"scores": {"discovery": 0.1, "development": 0.7, "tech": 0.15, "other": 0.05}}

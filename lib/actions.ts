@@ -24,6 +24,8 @@ const ms = (d: Date | null | undefined) => (d ? d.getTime() : undefined)
 
 /** Everything for the signed-in person. `refresh` skips stamping this as a new visit. */
 export async function loadState(opts: { refresh?: boolean } = {}): Promise<LoadResult> {
+  // the public demo: made-up postings in the visitor's browser; no database or sign-in, whatever is configured
+  if (process.env.DEMO_MODE === "1") return { mode: "preview", demo: true }
   if (!authConfigured() || !dbConfigured()) return { mode: process.env.NODE_ENV === "production" ? "unavailable" : "preview" }
   const v = await getViewer()
   if (!v) return { mode: "signedout" }

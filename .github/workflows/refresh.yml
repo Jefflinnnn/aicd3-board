@@ -1,10 +1,14 @@
 # Job data refresh in the cloud: runs scraper/pipeline.py every other day on GitHub's machines and
 # sends the results to the live site, so nobody's computer has to be on. Same pipeline as the Admin
-# page's Refresh button, with the keyword-rule classifier (GitHub's machines have no GPU for d3-flash).
+# page's Refresh button: Claude classifies when its secrets are set, else keyword rules (no GPU for d3-flash).
 #
 # Setup (GitHub → this repository → Settings → Secrets and variables → Actions → New repository secret):
 #   AICD3_URL           the live site, e.g. https://your-app.vercel.app (no trailing slash)
 #   AICD3_INGEST_TOKEN  the same value as SCRAPER_INGEST_TOKEN in Vercel's environment variables
+# Optional, to classify with Claude instead of keyword rules (the same values as in .env.local):
+#   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION, ANTHROPIC_BEDROCK_BASE_URL, ANTHROPIC_DEFAULT_SONNET_MODEL
+#   (or ANTHROPIC_API_KEY). UCSF's gateway only answers on the UCSF network/VPN, which GitHub's machines aren't on,
+#   so with UCSF's gateway these runs use keyword rules (the log says so); an Anthropic API key works from here.
 # Run it by hand any time from the Actions tab → "Job data refresh" → Run workflow.
 name: Job data refresh
 
@@ -33,6 +37,12 @@ jobs:
     env:
       AICD3_URL: ${{ secrets.AICD3_URL }}
       AICD3_INGEST_TOKEN: ${{ secrets.AICD3_INGEST_TOKEN }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_REGION: ${{ secrets.AWS_REGION }}
+      ANTHROPIC_BEDROCK_BASE_URL: ${{ secrets.ANTHROPIC_BEDROCK_BASE_URL }}
+      ANTHROPIC_DEFAULT_SONNET_MODEL: ${{ secrets.ANTHROPIC_DEFAULT_SONNET_MODEL }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
     steps:
       - name: Check the secrets are set
         run: |
@@ -51,7 +61,7 @@ jobs:
         run: pip install playwright && python -m playwright install --with-deps chromium
       - name: Scrape, classify, import, re-check
         run: |
-          args=(--url "$AICD3_URL" --classifier rules --summary-json scraper/out/summary.json)
+          args=(--url "$AICD3_URL" --classifier auto --summary-json scraper/out/summary.json)
           if [ "${{ inputs.dry_run }}" = "true" ]; then args+=(--dry-run); fi
           if [ -n "${{ inputs.companies }}" ]; then args+=(--companies ${{ inputs.companies }}); fi
           set +e

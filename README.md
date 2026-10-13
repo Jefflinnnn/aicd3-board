@@ -95,6 +95,8 @@ It needs the app running (`pnpm dev`, or `--url https://your-app`) and `SCRAPER_
 - **Is there real computational work?** (programming, data analysis, statistics, ML/AI, bioinformatics, modeling, building tools). Confident yes: published. Unsure: sent to the staff review queue with the model's confidence. No: left out.
 - **Which area?** Drug discovery (before clinical trials), drug development (during clinical trials), tech (not tied to a drug stage), or other. This becomes the posting's category.
 
+**Classifying with Claude (recommended).** Put the same Bedrock settings Claude Code uses in `.env.local`: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, `ANTHROPIC_BEDROCK_BASE_URL` (UCSF's gateway) and optionally `ANTHROPIC_DEFAULT_SONNET_MODEL` (default `us.anthropic.claude-sonnet-5`; or `ANTHROPIC_API_KEY` for the Anthropic API; `AICD3_LLM_MODEL` overrides the model), then restart the app. **UCSF's gateway only answers on the UCSF network or VPN**: each run checks it first, and off the VPN the log and the Admin page say "connect to the UCSF VPN" and that run uses keyword rules. Each new or changed posting gets one call: Claude answers both questions with a one-line reason (shown on review-queue items) and writes the summary, responsibilities and qualifications, so odd heading styles don't matter. Answers are cached, so a refresh only sends new postings, four at a time. If calls fail, that posting falls back to keyword rules; after five failures the rest of the run does. Check the settings with `python3 scraper/classify.py --check --classifier llm`. The Admin page shows "Classifier: Claude" once it's set up.
+
 The classifier is [vllm-sr/d3-flash](https://huggingface.co/vllm-sr/d3-flash), a 9B decision model run locally with `transformers` (install the commented packages in `scraper/requirements.txt`; it needs an NVIDIA GPU or an Apple-silicon Mac with about 20 GB of free memory, and downloads about 17 GB on first use). The Admin page's **Set up d3-flash** button (or `bash scraper/setup_d3.sh` on a Mac or Linux, `powershell -ExecutionPolicy Bypass -File scraper\setup_d3.ps1` on Windows) does all of it in one go, on an Apple-silicon Mac or a PC with an NVIDIA GPU (20 GB or more): it builds a separate Python environment (`.venv-d3`), installs the packages, downloads the model, classifies a sample, and points the Refresh button at that environment (`SCRAPER_PYTHON` and a pinned `D3_REVISION` in `.env.local`). Docker isn't used for this because containers on a Mac can't reach its GPU. `python3 scraper/classify.py --check` loads the model and classifies one sample. If it can't load, the pipeline falls back to keyword rules and says so. Every run writes `scraper/out/pipeline/fit.csv` listing each posting, the decision and the confidence.
 
 **When a run fails.** Each run writes a full log to `scraper/out/logs/pipeline-<date>-<time>.log` (the last 30 are kept), whether it was started from the Admin page or a terminal. The log marks each stage (`[step] 1/4 scrape`, `2/4 classify`, `3/4 import`, `4/4 re-check open postings`) with how long it took, and ends with `[run] finished` or `[run] FAILED during step: …` and the reason. On the Admin page, every run has a **Log** link with its last 400 lines, and a failed run shows the reason under it. The app's terminal (`pnpm dev` / `pnpm start`) prints a `[refresh]` line when a run starts and ends, with the last lines of a failed one. A run that was going when the app restarted or closed is marked failed with "the app restarted or was closed while this run was going", because the run ends with the app. If re-checking open postings fails, the import before it is still saved and the run says so.
@@ -152,6 +154,19 @@ The scraper can also run on its own: `pip install -r scraper/requirements.txt`, 
 **What a deploy does.** Vercel runs `pnpm vercel-build` (`scripts/vercel-build.mjs`): on a production deploy it first runs `prisma migrate deploy` against the production database, then `prisma generate && next build`. Preview deploys skip the migration step, so a branch can never change production's schema. Keep migrations additive (new tables, new columns that are nullable or have a default) so the previous code still works if a build fails after migrating.
 
 **Errors.** Every unhandled error in a page, route or server action is logged as one JSON line with `"event":"request-error"` (`instrumentation.ts`, no request bodies or cookies). Find them in Vercel under **Logs**, filtered by `request-error`; locally they print in the terminal.
+
+## Public demo
+
+A copy of the site anyone can open, to show the board to people outside UCSF: the same dashboard, job board and company pages with made-up postings from made-up companies (Company A, Company B…), no links out, and a banner saying it's a demo with a link to the real board. Visitors act as a student; what they save stays in their own browser. There's no sign-in, no Admin page, and `/api/*` answers 404.
+
+Deploy it as a **second Vercel project** from the same GitHub repo (e.g. `aicd3-demo`), with only these environment variables:
+
+```bash
+DEMO_MODE=1
+NEXT_PUBLIC_REAL_SITE_URL=https://your-real-site.vercel.app   # optional: the banner links here
+```
+
+Give it **no** database, Neon Auth or scraper variables. Even if some were set by mistake, demo mode never reads or writes the database (`tests/access.test.mts` checks this). Try it locally with `pnpm dev:demo` (http://localhost:3001, alongside `pnpm dev` on :3000; plain `pnpm dev` is always the real site).
 
 ## Local development database
 

@@ -565,6 +565,41 @@ if __name__ == "__main__":
     unittest.main()
 
 
+NVIDIA_DESC = '<p>By submitting your resume, you acknowledge that your Ph.D. Engineering internship application will be processed in accordance with NVIDIA’s <a href="#">Applicant Privacy Policy</a> and you agree to our <a href="#">Terms of Service</a>. We’ll review resumes on an ongoing basis, and a recruiter may reach out if your experience fits one of our many internship opportunities. </p><p></p><p>NVIDIA pioneered accelerated computing to tackle challenges no one else can solve. Our work in AI and digital twins is transforming the world&#39;s largest industries and profoundly impacting society — from gaming to robotics, self-driving cars to life-saving healthcare, climate change to virtual worlds where we can all connect and create. </p><p></p><p><span><span>Our internships offer an excellent opportunity to expand your career and get hands on experience with one of our industry leading Computer Architecture and Systems teams.<span> </span></span><span>We’re</span><span><span> </span></span><span>seeking</span><span><span> </span>strategic, ambitious, hard-working, collaborative, and creative individuals who are passionate about helping us tackle challenges no one else can solve.</span></span></p><p></p><p>Learn more about <a href="#"><u>Research at NVIDIA</u></a>. </p><p></p><p><b>What you will be doing:</b> </p><div><ul><li><p><span>Design and implement novel ideas in GPU and CPU architectures, systems architectures, operating systems, AI systems, and distributed systems that advance computing, graphics, media processing, and related technologies central to NVIDIA&#39;s business.</span></p></li><li><p><span>Collaborate with other team members, teams, and/or external researchers.</span></p></li><li><p><span>Transfer your research to product groups to enable new products or types of products. Deliverable results include prototypes, patents, products, and/or publishing original research.</span></p></li></ul></div><p></p><div><div><p><b><span>What we need to see:</span></b><span> </span></p></div><div><ul><li><p><span>Must be actively enrolled in a university pursuing a Ph.D. degree in Computer Science, Electrical Engineering, or a related field, for the full duration of the internship; </span><b><span>anticipated graduation date (</span></b><u><span>month and year</span></u><b><span>) </span></b><span>must be clearly indicated on a resume or CV to be considered.</span></p></li><li><p><b><span>Depending on the internship, prior experience or knowledge requirements could</span></b><i><span> </span></i><b><span>include the following programming skills and technologies: </span></b><span>C, C&#43;&#43;, Python, CUDA</span></p></li><li><p><span>Strong background in research with publications at top conferences.</span></p></li><li><p><span>Excellent communication and collaboration skills.</span></p></li></ul></div></div><p></p><div><div><p><b><span>Potential internships require research experience in at least one of the following areas:</span></b></p></div><div><ul><li><p>Chip-level and System-level Architecture</p></li></ul><p>GPU and Multi-GPU Architecture</p><p>Scalable on-chip and off-chip interconnects</p><ul><li><p>Systems for AI/ML</p></li></ul><p>ML for EDA</p></div></div><p></p><p>Click <a href="#"><u>here</u></a><b> </b>to learn more about NVIDIA, our early talent programs, benefits offered to students and other helpful student resources related to our latest technologies and endeavors. </p>Our internship hourly rates are a standard pay based on the position, your location, year in school, degree, and experience. The hourly rate for our interns is 38 USD - 94 USD.<p></p><p>You will also be eligible for Intern <a href="#">benefits</a>.</p>Applications are accepted on an ongoing basis.<p></p><p>This posting is for an existing vacancy. </p><p>NVIDIA uses AI tools in its recruiting processes.</p><p></p>NVIDIA is committed to fostering an inclusive work environment and proud to be an equal opportunity employer. As we highly value diversity in our current and future employees, we do not discriminate on the basis of race, religion, color, national origin, gender, gender expression, sexual orientation, age, marital status, veteran status, disability status or any other characteristic protected by law.<p></p>\n'
+
+
+class NvidiaDescription(unittest.TestCase):
+    """NVIDIA's postings: "What you will be doing" / "What we need to see", privacy small print first,
+    and pay written "38 USD - 94 USD" (live posting JR2023856, 12 Oct 2026)."""
+
+    def setUp(self):
+        self.text = pi.html_to_text(NVIDIA_DESC)
+
+    def test_requirements_are_qualifications_not_responsibilities(self):
+        s = pi.extract_sections(self.text)
+        self.assertEqual(len(s["resp"]), 3)
+        self.assertTrue(s["resp"][0].startswith("Design and implement novel ideas"))
+        self.assertTrue(s["quals"][0].startswith("Must be actively enrolled in a university pursuing a Ph.D."))
+        self.assertTrue(any("CUDA" in q for q in s["quals"]))
+        self.assertFalse(any("Ph.D." in r for r in s["resp"]))
+
+    def test_summary_skips_the_privacy_small_print(self):
+        summary = pi.job_summary(self.text, "NVIDIA", "NVIDIA 2027 Summer Internships: Ph.D. Engineering")
+        self.assertTrue(summary.startswith("Our internships offer an excellent opportunity"), summary)
+        self.assertNotIn("By submitting", summary)
+        self.assertNotIn("hourly", summary)
+        self.assertNotIn("following areas", summary)
+        self.assertNotIn("benefits", summary)
+
+    def test_pay_with_the_currency_after_the_number(self):
+        self.assertEqual(pi.extract_pay(self.text), "$38 - $94/hr")
+        self.assertEqual(pi.extract_pay("Pay: $45 - $55/hr"), "$45 - $55/hr")   # the usual form still works
+
+    def test_other_heading_spellings(self):
+        s = pi.extract_sections("What you'll be doing:\n• Build models\nWays to stand out from the crowd:\n• PyTorch experience")
+        self.assertEqual((s["resp"], s["quals"]), (["Build models"], ["PyTorch experience"]))
+
+
 class LiveFormats(unittest.TestCase):
     """Formats seen on the live career sites on 12 Oct 2026."""
 

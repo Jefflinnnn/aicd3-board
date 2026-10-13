@@ -134,6 +134,42 @@ export const COMPANIES: Company[] = [
   { id: "nvidia", name: "NVIDIA", type: "Tech", hq: "Santa Clara, CA", site: "https://www.nvidia.com", focus: [0.4, 0.1, 0.5], w: 0 },
   { id: "revmed", name: "Revolution Medicines", type: "Mid-size biotech", hq: "Redwood City, CA", site: "https://www.revmed.com", focus: [0.5, 0.4, 0.1], w: 0 },
 ]
+/**
+ * The public demo's companies (DEMO_MODE=1): made-up names, no links, so nothing on the demo can be
+ * mistaken for a real opening at a real company. switchToDemoCompanies() swaps them in before the sample
+ * postings are generated.
+ */
+export const DEMO_COMPANIES: Company[] = [
+  { id: "co-a", name: "Company A", type: "Large pharma", hq: "South San Francisco, CA", site: "", focus: [0.4, 0.35, 0.25], w: 5 },
+  { id: "co-b", name: "Company B", type: "Large pharma", hq: "Cambridge, MA", site: "", focus: [0.35, 0.45, 0.2], w: 4 },
+  { id: "co-c", name: "Company C", type: "Large pharma", hq: "Foster City, CA", site: "", focus: [0.3, 0.55, 0.15], w: 4 },
+  { id: "co-d", name: "Company D", type: "Large pharma", hq: "New York, NY", site: "", focus: [0.3, 0.5, 0.2], w: 4 },
+  { id: "co-e", name: "Company E", type: "Large pharma", hq: "Rahway, NJ", site: "", focus: [0.35, 0.45, 0.2], w: 3 },
+  { id: "co-f", name: "Company F", type: "Mid-size biotech", hq: "Boston, MA", site: "", focus: [0.45, 0.4, 0.15], w: 3 },
+  { id: "co-g", name: "Company G", type: "Mid-size biotech", hq: "San Diego, CA", site: "", focus: [0.5, 0.35, 0.15], w: 3 },
+  { id: "co-h", name: "Company H", type: "Mid-size biotech", hq: "Redwood City, CA", site: "", focus: [0.5, 0.4, 0.1], w: 2 },
+  { id: "co-i", name: "Company I", type: "Startup", hq: "South San Francisco, CA", site: "", focus: [0.3, 0, 0.7], w: 2 },
+  { id: "co-j", name: "Company J", type: "Startup", hq: "Boston, MA", site: "", focus: [0.5, 0.05, 0.45], w: 2 },
+  { id: "co-k", name: "Company K", type: "Startup", hq: "San Diego, CA", site: "", focus: [0.35, 0.1, 0.55], w: 2 },
+  { id: "co-l", name: "Company L", type: "Tech", hq: "Santa Clara, CA", site: "", focus: [0.4, 0.1, 0.5], w: 2 },
+]
+const DEMO_SITES: Record<string, string[]> = {
+  "co-a": ["South San Francisco, CA", "Oceanside, CA", "Vacaville, CA"],
+  "co-b": ["Cambridge, MA", "San Diego, CA"],
+  "co-c": ["Foster City, CA", "Santa Monica, CA"],
+  "co-d": ["New York, NY", "South San Francisco, CA", "Groton, CT"],
+  "co-e": ["Rahway, NJ", "Boston, MA", "West Point, PA"],
+  "co-f": ["Boston, MA", "San Diego, CA"],
+}
+let demo = false
+export const isDemo = () => demo
+/** Switch this browser session to the demo's made-up companies (and its own storage). */
+export function switchToDemoCompanies() {
+  demo = true
+  COMPANIES.splice(0, COMPANIES.length, ...DEMO_COMPANIES)
+  Object.assign(SITES, DEMO_SITES)
+}
+
 export const coById = (id: string): Company =>
   COMPANIES.find((c) => c.id === id) || { id, name: id, type: "Startup", hq: "", site: "#", focus: [1, 0, 0], w: 0 }
 
@@ -292,6 +328,7 @@ Object.assign(COORDS, {
   "Saint Joseph, MO": [39.77, -94.85], "Zebulon, NC": [35.82, -78.31], "West Greenwich, RI": [41.63, -71.66],
   "Mettawa, IL": [42.24, -87.92], "Upper Merion, PA": [40.08, -75.38], "Upper Providence, PA": [40.16, -75.48],
   "New York City, NY": [40.71, -74.01], "Irvine, CA": [33.68, -117.83],
+  "Santa Clara, CA": [37.35, -121.96],
 })
 /** Bay Area cities by name, for sites without coordinates (the nine counties plus Santa Cruz). */
 const BAY_AREA_CITIES = new RegExp(
@@ -335,10 +372,11 @@ export const jobLocations = (j: Job): string[] =>
   [...new Set(j.locations && j.locations.length ? j.locations : [j.location])].sort((a, b) => milesFromHome(a) - milesFromHome(b) || a.localeCompare(b))
 
 /* ---------- local persistence (per browser) ---------- */
+const storeKey = (k: string) => (demo ? "ip3demo:" : "ip3:") + k
 export const store = {
   get<T>(k: string, d: T): T {
     try {
-      const v = localStorage.getItem("ip3:" + k)
+      const v = localStorage.getItem(storeKey(k))
       return v ? (JSON.parse(v) as T) : d
     } catch {
       return d
@@ -346,14 +384,14 @@ export const store = {
   },
   set(k: string, v: unknown) {
     try {
-      localStorage.setItem("ip3:" + k, JSON.stringify(v))
+      localStorage.setItem(storeKey(k), JSON.stringify(v))
     } catch {
       /* storage unavailable */
     }
   },
   del(k: string) {
     try {
-      localStorage.removeItem("ip3:" + k)
+      localStorage.removeItem(storeKey(k))
     } catch {
       /* storage unavailable */
     }

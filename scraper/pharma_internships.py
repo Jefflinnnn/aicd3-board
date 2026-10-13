@@ -450,8 +450,17 @@ SALARY_RE = re.compile(
 )
 
 
+# "The hourly rate for our interns is 38 USD - 94 USD." (NVIDIA): currency after the number
+TRAILING_USD_RE = re.compile(r"(\d[\d,]*(?:\.\d+)?)\s?USD\s*(?:-|–|—|to)\s*(\d[\d,]*(?:\.\d+)?)\s?USD", re.I)
+
+
 def extract_pay(text: str) -> str:
     """The first pay figure or range in a description, e.g. "$28.87 per hour" or "$45 - $55/hr"."""
+    m = TRAILING_USD_RE.search(text or "")
+    if m:
+        around = (text or "")[max(0, m.start() - 120):m.end() + 40].lower()
+        unit = "/hr" if "hour" in around else "/yr" if re.search(r"annual|year|salary", around) else ""
+        return f"${m.group(1)} - ${m.group(2)}{unit}"
     for m in SALARY_RE.finditer(text or ""):
         val = clean(m.group(0))
         if re.search(r"\d{2}", val):          # skip "$1" style noise
@@ -462,6 +471,7 @@ def extract_pay(text: str) -> str:
 SECTION_HEADS = {
     "resp": re.compile(r"^(?:key\s+|your\s+|main\s+|primary\s+|position\s+|examples of key\s+)?(?:responsibilit|duties|"
                        r"what you(?:'|’)?ll do|what you will do|what will you do|what you will achieve|"
+                       r"what you(?:'|’)?ll be doing|"
                        r"the role|role overview|key activities|day to day|day-to-day|in this role|job description|"
                        r"your mission|tasks|what you will be doing|your impact|the opportunity|projects may include|"
                        r"during your internship|key deliverables|deliverables)", re.I),
@@ -470,7 +480,8 @@ SECTION_HEADS = {
                         r"skills|experience|education|about you|your profile|we(?:'|’)?re looking for|"
                         r"must[- ]haves?|nice[- ]to[- ]haves?|what we expect of you|what are we looking for|"
                         r"what you will need|let(?:'|’)?s find out if|you(?:'|’)?re basic requirements|your basic requirements|"
-                        r"additional (?:skills|preferences)|preferences|ideal candidate)", re.I),
+                        r"additional (?:skills|preferences)|preferences|ideal candidate|"
+                        r"what we need to see|ways to stand out|what you need|what you(?:'|’)?ll need)", re.I),
 }
 # Headings after which bullets are not responsibilities or qualifications (pay, benefits, about us...).
 SECTION_STOP = re.compile(r"^(?:compensation|salary|pay\b|benefits?|what (?:do )?we offer|what you can expect|why |about |"
@@ -1551,8 +1562,20 @@ def _company_words(company: str) -> list[str]:
     return words + extra
 
 
+# Application small print, never a job summary even when it says "internship" (NVIDIA opens with this)
+BOILERPLATE = re.compile(r"^by submitting your (?:resume|application)|applicant privacy policy|terms of service|"
+                         r"posting is for an existing vacancy|uses ai tools in its recruiting|"
+                         r"applications are accepted on an ongoing basis", re.I)
+
+
+PAY_TALK = re.compile(r"\b(?:hourly rates?|pay range|base pay|salary range|compensation range|rate for our interns|"
+                      r"eligible for (?:intern |our )?benefits)\b", re.I)
+
+
 def is_company_blurb(par: str, company: str) -> bool:
     """'At Gilead, we're creating a healthier world...' - about the company, not the job."""
+    if BOILERPLATE.search(par):
+        return True
     if ROLE_WORDS.search(par):
         return False
     names = _company_words(company)
@@ -1578,6 +1601,9 @@ def job_summary(text: str, company: str = "", title: str = "", n: int = 3, max_l
                 skipping = False
             continue
         if skipping or l.startswith("•") or (title and l.strip().lower() == title.strip().lower()):
+            continue
+        # a lead-in to a list ("...in at least one of the following areas:") or a sentence about pay
+        if l.endswith(":") or PAY_TALK.search(l):
             continue
         if is_company_blurb(l, company):
             continue

@@ -24,7 +24,7 @@ const ROLE_LABEL: Record<Role, string> = { student: "Student", staff: "Staff", a
  * and (admins only) make people staff or admin.
  */
 export function People({ flash }: { flash?: boolean }) {
-  const { mode, me } = useApp()
+  const { mode, me, demo } = useApp()
   const [people, setPeople] = useState<Person[] | null>(null)
   const [invites, setInvites] = useState<Invite[]>([])
   const [viewerRole, setViewerRole] = useState<Role>("staff")
@@ -81,7 +81,15 @@ export function People({ flash }: { flash?: boolean }) {
   }, [people])
 
   if (mode === "preview")
-    return (
+    return demo ? (
+      <Panel id="admin-people" title="People & access" sub="Who can use the board, and what they can do.">
+        <p className="text-sm text-muted-foreground">
+          The demo has no real accounts. On the real board, people sign in with their UCSF email; staff approve new students
+          (or let UCSF addresses in automatically), invite students and staff by email, and admins make people staff or remove them.
+          Every access change is recorded in an audit log.
+        </p>
+      </Panel>
+    ) : (
       <Panel id="admin-people" title="People & access" sub="Approving students and adding staff works once sign-in and the database are set up (see the README).">
         <p className="text-sm text-muted-foreground">This local preview has no accounts.</p>
       </Panel>

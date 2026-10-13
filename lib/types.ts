@@ -31,7 +31,8 @@ export interface Me {
 
 /** Everything the app needs on load, scoped to what this person may see. */
 export type LoadResult =
-  | { mode: "preview" | "signedout" | "unavailable" }
+  | { mode: "preview"; demo?: boolean }
+  | { mode: "signedout" | "unavailable" }
   | { mode: "pending" | "blocked" | "outside"; me: Me }
   | {
       mode: "cloud"
@@ -75,6 +76,8 @@ export interface RefreshRun {
     database: { added: number; staged: number; updated: number; closed: number; unchanged: number; rejected: number; dropped?: number; unlisted?: number }
     errors: number
     checked: { open: number; closed: number; unknown: number } | null
+    /** why Claude wasn't used for this run (off the UCSF VPN, failed calls...), when it was set up */
+    classifierNote?: string
     /** why re-checking open postings stopped, when it did (the import before it was still saved) */
     checkError?: string | null
     companies: Record<string, string>
@@ -91,5 +94,6 @@ export interface RefreshStatus {
   nextAt: number | null
   runs: RefreshRun[]
   /** which classifier refreshes use; canSetup is why this server can't set up d3-flash, or null */
-  classifier: { d3: boolean; revision: string; canSetup: string | null }
+  /** llm: the Claude model refreshes use ("" when not configured); canSetup is why this server can't set up d3-flash, or null */
+  classifier: { llm: string; d3: boolean; revision: string; canSetup: string | null }
 }

@@ -211,7 +211,7 @@ export default function Companies() {
                     <td className="px-3 text-right font-mono tabular-nums">{lv}</td>
                     <td className="px-5">
                       <div className="flex items-center justify-end gap-3">
-                        <a href={c.site} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline">Site <ArrowUpRight className="size-3" /></a>
+                        {c.site && <a href={c.site} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline">Site <ArrowUpRight className="size-3" /></a>}
                         <Button size="sm" variant="outline" className="h-7 w-[6.5rem] text-xs" disabled={!tot} onClick={() => go("jobs", lv ? { company: [c.id] } : { company: [c.id], status: "all" })}>
                           {lv ? `See ${lv} role${lv === 1 ? "" : "s"}` : tot ? "Past roles" : "No roles yet"}
                         </Button>
@@ -256,9 +256,11 @@ export default function Companies() {
                 <div><b className="block font-display text-2xl leading-none tabular-nums text-foreground">{tot}</b>tracked all-time</div>
               </div>
               <div className="mt-auto flex items-center justify-between gap-2 border-t pt-3">
-                <a href={c.site} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-sm font-medium text-primary hover:underline">
-                  Company site <ArrowUpRight className="size-3.5" />
-                </a>
+                {c.site ? (
+                  <a href={c.site} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-sm font-medium text-primary hover:underline">
+                    Company site <ArrowUpRight className="size-3.5" />
+                  </a>
+                ) : <span />}
                 {/* every card gets the same footer button so the cards line up; with nothing live it opens past roles */}
                 {lv > 0 ? (
                   <Button size="sm" variant="outline" className="w-[7.5rem]" onClick={() => go("jobs", { company: [c.id] })}>See {lv} role{lv === 1 ? "" : "s"}</Button>

@@ -51,6 +51,7 @@ export async function audit(actorId: string | null, action: string, target?: str
 
 /** The signed-in person with their Profile, created on first visit. One lookup per request. */
 export const getViewer = cache(async (): Promise<Viewer | null> => {
+  if (process.env.DEMO_MODE === "1") return null   // the public demo has no real people, so every server action refuses
   const { data } = await auth().getSession()
   const u = data?.user
   if (!u?.id || !u.email) return null
