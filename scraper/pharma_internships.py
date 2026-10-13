@@ -244,14 +244,24 @@ class PoliteClient:
         head = resp.text[:20000].lower() if "html" in ctype else ""
         if any(m in head or m in (resp.url or "").lower() for m in MAINTENANCE_MARKERS):
             raise UnavailableError(f"{resp.request.method} {resp.url} -> the site is down for maintenance; try again later.")
-        hard_marker = any(m in head for m in ("cf-chl", "challenge-platform", "px-captcha",
-                                              "_incapsula_resource", "g-recaptcha", "hcaptcha"))
-        soft_marker = any(m in head for m in BLOCK_MARKERS)
-        if resp.status_code in (401, 403) or hard_marker or (
-                resp.status_code in (429, 503) and soft_marker):
+        # A real challenge page: Cloudflare's "Just a moment..." interstitial (it loads
+        # /cdn-cgi/challenge-platform/.../orchestrate/... and sets cf-mitigated), PerimeterX or Incapsula block
+        # pages. Cloudflare also adds a background script (/cdn-cgi/challenge-platform/scripts/jsd/main.js) to
+        # ordinary pages that loaded fine, e.g. Eli Lilly's Workday: on a 200 answer that is not a block.
+        status = resp.status_code
+        interstitial = next((m for m in ("<title>just a moment", "_cf_chl_opt", "challenge-platform/h/",
+                                         "/orchestrate/", "cf-browser-verification",
+                                         "px-captcha", "_incapsula_resource") if m in head), None)
+        if resp.headers.get("cf-mitigated", "").lower() == "challenge":
+            interstitial = "cf-mitigated: challenge"
+        widget = next((m for m in ("cf-chl", "challenge-platform", "g-recaptcha", "hcaptcha") if m in head), None)
+        soft_marker = next((m for m in BLOCK_MARKERS if m in head), None)
+        why = ("HTTP %d" % status if status in (401, 403) else interstitial
+               or (widget if status != 200 else None) or (soft_marker if status in (429, 503) else None))
+        if why:
             server = resp.headers.get("Server", "?")
             raise BlockedError(
-                f"{resp.request.method} {resp.url} -> HTTP {resp.status_code} (server: {server}). "
+                f"{resp.request.method} {resp.url} -> HTTP {status} (server: {server}; {why}). "
                 "The site returned a bot challenge/WAF block. Slow down, try the sitemap fallback, "
                 "or run with --manual-session to complete the check in a real browser."
             )
@@ -763,13 +773,16 @@ def scrape_workday(client: PoliteClient, company: str, cfg: dict, details: bool)
         host = resolve_workday_host(client, tenant, host, site, cfg.get("alt_hosts", []))
         board, _ = workday_urls(tenant, host, site)
         everything = bool(opts.get("all"))     # a student-only board: take every posting on it
+        log.info("   %s: searching %s", company, board)
         try:
             for term in ([""] if everything else cfg.get("terms", WORKDAY_TERMS)):
+                before = len(out)
                 for jp in workday_search(client, tenant, host, site, term):
                     title, path = jp.get("title", ""), jp.get("externalPath", "")
                     if not path or path in out or not (everything or is_internship(title)):
                         continue
                     out[path] = workday_listing(company, board, tenant, site, jp)
+                log.info("   %s: %s %r: %d new internship listings", company, site, term or "(everything)", len(out) - before)
         except UnavailableError:
             raise
         except (BlockedError, requests.HTTPError) as e:
@@ -780,9 +793,10 @@ def scrape_workday(client: PoliteClient, company: str, cfg: dict, details: bool)
                     out[p.url] = p
             continue
         if details:
-            for path, p in out.items():
-                if not p.source.startswith(f"workday:{tenant}/{site}"):
-                    continue
+            mine = [(path, p) for path, p in out.items() if p.source.startswith(f"workday:{tenant}/{site}")]
+            for k, (path, p) in enumerate(mine, 1):
+                if k == 1 or k % 10 == 0 or k == len(mine):
+                    log.info("   %s: %s details %d/%d", company, site, k, len(mine))
                 try:
                     apply_workday_detail(p, workday_detail(client, tenant, host, site, path))
                 except (requests.RequestException, ValueError) as e:
@@ -821,9 +835,16 @@ def apply_workday_detail(p: Posting, info: dict) -> None:
 # playwright install chromium
 # --------------------------------------------------------------------------------------
 _BROWSER_FETCH = """async ([url, body]) => {
-  const r = await fetch(url, body ? { method: 'POST', body, headers: { 'Content-Type': 'application/json', Accept: 'application/json' } }
-                                  : { headers: { Accept: 'application/json' } });
-  return { status: r.status, text: await r.text() };
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), 30000);   // never wait forever on one call
+  try {
+    const r = await fetch(url, { signal: ctl.signal, ...(body
+      ? { method: 'POST', body, headers: { 'Content-Type': 'application/json', Accept: 'application/json' } }
+      : { headers: { Accept: 'application/json' } }) });
+    return { status: r.status, text: await r.text() };
+  } catch (e) {
+    return { status: 0, text: String(e) };
+  } finally { clearTimeout(t); }
 }"""
 
 
@@ -837,22 +858,28 @@ def scrape_workday_browser(client: PoliteClient, company: str, cfg: dict, detail
     def call(page, url: str, payload: dict | None = None) -> dict:
         time.sleep(random.uniform(client.min_delay, client.max_delay))   # same polite pace as plain HTTP
         r = page.evaluate(_BROWSER_FETCH, [url, json.dumps(payload) if payload is not None else None])
-        if r["status"] in (401, 403) or "cf-chl" in r["text"][:2000]:
+        if r["status"] == 0:
+            raise RuntimeError(f"{url} -> no answer within 30 s from inside the browser ({r['text'][:120]})")
+        if r["status"] in (401, 403) or "_cf_chl_opt" in r["text"][:5000]:
             raise BlockedError(f"{url} -> HTTP {r['status']} even from a real browser")
         if r["status"] != 200:
             raise RuntimeError(f"{url} -> HTTP {r['status']}: {r['text'][:200]}")
         return json.loads(r["text"])
 
+    log.info("   %s: starting headless Chromium", company)
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=True)
+        browser = pw.chromium.launch(headless=True, timeout=60_000)
         try:
             ctx = browser.new_context(user_agent=DEFAULT_UA, locale="en-US")
             page = ctx.new_page()
+            page.set_default_timeout(45_000)
             for tenant, host, site, *opt in cfg["boards"]:
                 opts = opt[0] if opt else {}
                 everything = bool(opts.get("all"))
                 board, api = workday_urls(tenant, host, site)
-                page.goto(board, wait_until="domcontentloaded", timeout=60_000)
+                log.info("   %s: opening %s in the browser", company, board)
+                resp = page.goto(board, wait_until="domcontentloaded", timeout=45_000)
+                log.info("   %s: page loaded (HTTP %s, title %r)", company, resp.status if resp else "?", page.title()[:60])
                 api_path = urlparse(api).path   # same-origin call from the board page
                 found: list[Posting] = []
                 for term in ([""] if everything else cfg.get("terms", WORKDAY_TERMS)):
@@ -870,8 +897,11 @@ def scrape_workday_browser(client: PoliteClient, company: str, cfg: dict, detail
                         offset += WD_PAGE
                         if not rows or offset >= total or offset >= WD_PAGE * 50:
                             break
+                    log.info("   %s: %s %r: %d jobs searched, %d internships so far", company, site, term or "(everything)", total, len(found))
                 if details:
-                    for p in found:
+                    for k, p in enumerate(found, 1):
+                        if k == 1 or k % 10 == 0 or k == len(found):
+                            log.info("   %s: %s details %d/%d (browser)", company, site, k, len(found))
                         try:
                             apply_workday_detail(p, call(page, api_path + p.url[len(board):]).get("jobPostingInfo", {}))
                         except (RuntimeError, ValueError) as e:

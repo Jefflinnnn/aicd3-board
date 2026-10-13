@@ -69,6 +69,18 @@ class BlockDetection(unittest.TestCase):
         with self.assertRaises(pi.BlockedError):
             pi.PoliteClient._check_block(make_resp("https://x.test/a", 200, body, "text/html"))
 
+    def test_cloudflare_background_script_on_a_normal_page_passes(self):
+        # Eli Lilly's Workday (12 Oct 2026): a 200 page that only loads Cloudflare's JS-detection script
+        body = ("<html><title></title><script>window.__CF$cv$params={r:'a49c'};var a=document.createElement('script');"
+                "a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';</script></html>")
+        pi.PoliteClient._check_block(make_resp("https://lilly.wd115.myworkdayjobs.com/CMP", 200, body, "text/html"))
+
+    def test_cloudflare_interstitial_403_names_the_reason(self):
+        body = "<html><title>Just a moment...</title><script>window._cf_chl_opt={}</script></html>"
+        with self.assertRaises(pi.BlockedError) as e:
+            pi.PoliteClient._check_block(make_resp("https://x.test/a", 403, body, "text/html"))
+        self.assertIn("HTTP 403", str(e.exception))
+
     def test_normal_page_passes(self):
         pi.PoliteClient._check_block(make_resp("https://x.test/a", 200, "<html><h1>Jobs</h1></html>", "text/html"))
         pi.PoliteClient._check_block(make_resp("https://x.test/a", 200, '{"jobs": []}'))
