@@ -9,6 +9,9 @@ import classify as c
 import pharma_internships as pi
 import pipeline
 
+# pipeline.main() writes a run log; keep the tests' logs out of the real scraper/out/logs/
+os.environ["AICD3_LOG_FILE"] = os.path.join(tempfile.mkdtemp(prefix="aicd3-test-logs-"), "pipeline-test.log")
+
 
 class AnswerShapes(unittest.TestCase):
     """d3-flash's card doesn't pin down the answer format, so accept the plausible ones."""
