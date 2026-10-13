@@ -185,6 +185,11 @@ def check(client: pi.PoliteClient, p: dict) -> Result:
         return res("unknown", f"request failed: {e.__class__.__name__}")
 
 
+# Workday hosts of companies marked "impersonate" in pharma_internships.COMPANIES (Eli Lilly's wd115)
+IMPERSONATE_HOSTS = {f"{b[0]}.{b[1]}.myworkdayjobs.com" for cfg in pi.COMPANIES.values()
+                     if cfg.get("impersonate") and cfg.get("platform") == "workday" for b in cfg["boards"]}
+
+
 def site_key(p: dict) -> str:
     url = p.get("url") or ""
     if ASHBY_URL.match(url):
@@ -200,6 +205,8 @@ def check_all(postings: list[dict], client: pi.PoliteClient, workers: int) -> li
 
     def run_host(items: list[dict]) -> list[Result]:
         c = client if workers <= 1 else client.clone()
+        if site_key(items[0]) in IMPERSONATE_HOSTS:   # behind a bot check that refuses Python's handshake
+            c = c.impersonating()
         return [check(c, p) for p in items]
 
     results: list[Result] = []

@@ -14,8 +14,8 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { CatChip, DeadlineCell, LocationCell, NewBadge, PageHead, StatusPill } from "@/components/common"
-import { DEFAULT_FILTERS, EMPTY_FILTERS, STATE_PREFIX, SORT_PRESETS, useApp, type DeadlineFilter, type JobFilters, type SortKey, type SortSpec, type StatusFilter } from "@/lib/state"
-import { CATS, COMPANIES, TYPES, catById, coById, daysLeft, fmt, isLive, jobLocations, milesFromHome, parse, store, type Job } from "@/lib/data"
+import { BAY_AREA, DEFAULT_FILTERS, EMPTY_FILTERS, STATE_PREFIX, SORT_PRESETS, useApp, type DeadlineFilter, type JobFilters, type SortKey, type SortSpec, type StatusFilter } from "@/lib/state"
+import { CATS, COMPANIES, TYPES, catById, coById, daysLeft, fmt, isLive, isBayArea, jobLocations, milesFromHome, parse, store, type Job } from "@/lib/data"
 import type { MyStatus } from "@/lib/backend"
 import { cn } from "@/lib/utils"
 
@@ -44,11 +44,12 @@ function deadlineRank(j: Job): [number, number] {
 /** Per-viewer convenience: the board remembers its view in this browser. */
 interface BoardView { q: string; filters: JobFilters; sort: SortSpec; tab: Tab; pageSize: number; filtersV?: number }
 /** bump when DEFAULT_FILTERS changes, so remembered filters from before don't hide the new defaults */
-const FILTERS_V = 2
+const FILTERS_V = 3
 const STATE_NAMES: Record<string, string> = { CA: "California", MA: "Massachusetts", NJ: "New Jersey", NY: "New York", PA: "Pennsylvania", IL: "Illinois", IN: "Indiana", NC: "North Carolina", MD: "Maryland", WA: "Washington", CT: "Connecticut", OR: "Oregon", OH: "Ohio", GA: "Georgia", UT: "Utah", TX: "Texas", RI: "Rhode Island", DE: "Delaware", MO: "Missouri", CO: "Colorado" }
 const stateOf = (loc: string) => /, ([A-Z]{2})$/.exec(loc)?.[1] || ""
-/** a location filter value matches a site: "state:CA" any California site, else the exact site */
-const locMatch = (value: string, loc: string) => (value.startsWith(STATE_PREFIX) ? stateOf(loc) === value.slice(STATE_PREFIX.length) : value === loc)
+/** a location filter value matches a site: "region:bay" any Bay Area site, "state:CA" any California site, else the exact site */
+const locMatch = (value: string, loc: string) =>
+  value === BAY_AREA ? isBayArea(loc) : value.startsWith(STATE_PREFIX) ? stateOf(loc) === value.slice(STATE_PREFIX.length) : value === loc
 const sameFilters = (a: JobFilters, b: JobFilters) => JSON.stringify(a) === JSON.stringify(b)
 
 /* ---------- menu content shared by headers, chips and “+ Filter” ---------- */
@@ -108,11 +109,19 @@ export default function JobBoard() {
   useEffect(() => {
     store.set("board", { q, filters, sort, tab, pageSize, filtersV: FILTERS_V } satisfies BoardView)
   }, [q, filters, sort, tab, pageSize])
-  useEffect(() => setPage(1), [q, filters, sort, tab, pageSize])
+  // back to page 1 whenever what's listed changes (adjusted while rendering, not in an effect)
+  const listKey = JSON.stringify([q, filters, sort, tab, pageSize])
+  const [pageFor, setPageFor] = useState(listKey)
+  if (pageFor !== listKey) {
+    setPageFor(listKey)
+    setPage(1)
+  }
 
   useEffect(() => {
     if (pendingFilter || pendingTab) {
       if (pendingFilter) {
+        // a link elsewhere (a chart, the map) handed over filters; apply them once and clear the hand-off
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         setFilters({ ...EMPTY_FILTERS, ...pendingFilter })
         setQ("")
       }
@@ -144,6 +153,7 @@ export default function JobBoard() {
       const states = [...new Set(sites.map(stateOf).filter(Boolean))]
       if (!states.includes("CA")) states.unshift("CA")
       return [
+        [BAY_AREA, "Bay Area"] as [string, string],
         ...states.map((st) => [STATE_PREFIX + st, `All of ${STATE_NAMES[st] || st}`] as [string, string]),
         ...sites.map((l) => [l, l] as [string, string]),
       ]
@@ -160,6 +170,7 @@ export default function JobBoard() {
         const hay = [j.title, c.name, jobLocations(j).join(" "), j.summary, j.resp.join(" "), j.quals.join(" "), catById(j.category).label, j.term, j.reqId || ""].join(" ").toLowerCase()
         if (!ql.split(/\s+/).every((w) => hay.includes(w))) return false
       }
+      if (filters.newOnly && !isNew(j)) return false
       if (filters.company.length && !filters.company.includes(j.company)) return false
       if (filters.location.length && !jobLocations(j).some((l) => filters.location.some((v) => locMatch(v, l)))) return false
       if (filters.category.length && !filters.category.includes(j.category)) return false
@@ -197,7 +208,7 @@ export default function JobBoard() {
       return r * sort.dir || a.title.localeCompare(b.title)
     })
     return out
-  }, [jobs, q, filters, sort, tab])
+  }, [jobs, q, filters, sort, tab, isNew])
 
   const groups = {
     todo: list.filter((j) => !applied.has(j.id) && !saved.has(j.id)),
@@ -341,7 +352,7 @@ export default function JobBoard() {
     <div className="flex flex-col gap-5">
       <PageHead
         title="Job board"
-        sub={<>Save roles you're interested in, then check them off once you apply.<br />Click a column to sort or filter, or a row for details. Press / to search.</>}
+        sub={<>Save roles you’re interested in, then check them off once you apply.<br />Click a column to sort or filter, or a row for details. Press / to search.</>}
         right={<Button variant="outline" onClick={() => openReport()}><Flag className="size-4" /> Report an issue</Button>}
       />
 
@@ -384,6 +395,13 @@ export default function JobBoard() {
               <Input ref={searchRef} type="search" aria-label="Search postings, including descriptions" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search postings and descriptions" className="h-8 bg-background pl-8 pr-8" />
               {!q && <kbd className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 rounded border bg-muted px-1.5 text-[0.7rem] text-muted-foreground">/</kbd>}
             </div>
+
+            {filters.newOnly && (
+              <span className={chipCls}>
+                <span className={chipBtn}>New since your last visit</span>
+                <button className={xBtn} aria-label="Remove new since your last visit filter" onClick={() => setF({ newOnly: undefined })}><X className="size-3.5" /></button>
+              </span>
+            )}
 
             {filters.status !== "live" && (
               <span className={chipCls}>

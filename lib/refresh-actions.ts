@@ -19,7 +19,7 @@ function toRun(r: { id: string; trigger: string; status: string; startedAt: Date
     finishedAt: r.finishedAt?.getTime() ?? null,
     by: r.requestedBy ? names[r.requestedBy] || "Staff" : null,
     summary: (r.summary as RefreshRun["summary"]) ?? null,
-    log: r.log.split("\n").slice(-12).join("\n"),
+    log: r.log.split("\n").slice(-400).join("\n"),
   }
 }
 

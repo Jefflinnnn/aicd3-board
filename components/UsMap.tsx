@@ -227,10 +227,11 @@ export function UsMap({ jobs, onCity, onState }: { jobs: Job[]; onCity: (city: s
       zoomTo(anim.current.target * Math.exp(-d * 0.002), [e.clientX - r.left, e.clientY - r.top])
     }
     el.addEventListener("wheel", onWheel, { passive: false, capture: true })
+    const a = anim.current
     return () => {
       el.removeEventListener("wheel", onWheel, { capture: true })
-      cancelAnimationFrame(anim.current.raf)
-      anim.current.raf = 0
+      cancelAnimationFrame(a.raf)
+      a.raf = 0
     }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
   const reset = () => zoomTo(1, null)

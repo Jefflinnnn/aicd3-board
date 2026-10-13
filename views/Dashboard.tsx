@@ -83,6 +83,9 @@ export default function Dashboard() {
   const counts = useMemo(() => CATS.map((c) => months.map((m) => jobs.filter((j) => j.category === c.id && inMonth(j.posted, m)).length)), [jobs, months])
   const monthSeries = (op: number[]) =>
     CATS.map((c, ci) => ({ id: "m-" + c.id, data: counts[ci].map((value, i) => ({ value, itemStyle: { opacity: op[i] } })) }))
+  // the chart's starting opacities come from the highlight animation's current frame (shade), which
+  // lives in a ref so the animation can drive the chart directly without re-rendering every frame
+  /* eslint-disable react-hooks/refs */
   const monthly = useMemo(() => {
     const { base, valueAxis, catAxis } = chartBase()
     return {
@@ -103,7 +106,8 @@ export default function Dashboard() {
         data: counts[ci].map((value, i) => ({ value, itemStyle: { opacity: shade.current[i] } })),
       })),
     }
-  }, [counts, dark, months]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [counts, dark, months]) // eslint-disable-line react-hooks/exhaustive-deps -- dark: colours are read from CSS variables, which change with the theme
+  /* eslint-enable react-hooks/refs */
   useEffect(() => {
     const from = [...shade.current]
     const to = months.map((_, i) => (i === monthIdx ? 1 : DIM))
@@ -196,7 +200,7 @@ export default function Dashboard() {
         data: stack[ci],
       })),
     }
-  }, [topRows, dark])
+  }, [topRows, dark]) // eslint-disable-line react-hooks/exhaustive-deps -- dark: colours are read from CSS variables, which change with the theme
   const topSub =
     topMode === "7" ? "Postings first seen in the past 7 days"
       : topMode === "30" ? "Postings first seen in the past 30 days"
@@ -558,7 +562,6 @@ export default function Dashboard() {
       </div>
     ) },
   ]
-  const weekNew = jobs.filter((j) => isLive(j) && ageDays(j) < 7).length
   const layout = normalizeLayout(sections.map((x) => x.id), mine.layout)
   const saveLayout = (order: string[], hidden: string[]) => {
     setLayout({ order, hidden }).catch(() => toast("Couldn't save your layout. Try again in a moment."))
@@ -569,30 +572,17 @@ export default function Dashboard() {
       {/* page header: title, a one-line status, and the customize switch */}
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div className="min-w-0">
-          {weekNew > 0 && (
+          {newCount > 0 && (
             <button
-              onClick={() => go("jobs", { status: "live" })}
+              onClick={() => go("jobs", { status: "live", newOnly: true })}
               className="shine-pill group mb-3 inline-flex items-center gap-2 rounded-full py-1 pl-2 pr-3 text-xs font-medium shadow-sm duration-500 animate-in fade-in slide-in-from-top-1"
             >
               <span className="grid size-4 place-items-center rounded-full bg-primary/15 text-primary"><Sparkles className="size-2.5" /></span>
-              {weekNew} new role{weekNew === 1 ? "" : "s"} this week
+              {newCount} new role{newCount === 1 ? "" : "s"} since your last visit
               <span className="text-muted-foreground transition-colors group-hover:text-foreground">See them <ArrowRight className="inline size-3 transition-transform group-hover:translate-x-0.5" /></span>
             </button>
           )}
           <h1 className="ink-sweep font-display text-[1.65rem] font-semibold leading-tight">Dashboard</h1>
-          <p className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
-            <span>{COMPANIES.length} companies tracked</span>
-            <span aria-hidden className="h-3.5 w-px bg-border" />
-            <span>{live.length} live roles</span>
-            {newCount > 0 && (
-              <>
-                <span aria-hidden className="h-3.5 w-px bg-border" />
-                <button className="font-medium text-primary hover:underline" onClick={() => go("jobs", { status: "live" })}>
-                  {newCount} new since your last visit
-                </button>
-              </>
-            )}
-          </p>
         </div>
         <Button variant={editing ? "default" : "outline"} size="sm" onClick={() => setEditing((x) => !x)} aria-pressed={editing}>
           {editing ? <><Check className="size-3.5" /> Done</> : <><LayoutGrid className="size-3.5" /> Customize</>}

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import Link from "next/link"
+import { useNow } from "@/lib/useNow"
 import { usePathname, useRouter } from "next/navigation"
 import { BriefcaseBusiness, Building2, ChevronRight, ChevronsUpDown, Keyboard, LogOut, Monitor, Moon, Sun, GraduationCap, LayoutDashboard, Lock, PanelLeftClose, PanelLeftOpen, Search, Settings as SettingsIcon, ShieldCheck } from "lucide-react"
 import { Toaster } from "@/components/ui/sonner"
@@ -49,7 +50,8 @@ const isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent)
 
 /** Data freshness, the way Vercel and Baseten show deployment health: a coloured dot and a short label. */
 function SyncPill({ mode, updatedAt }: { mode: string; updatedAt?: number }) {
-  const stale = !updatedAt || Date.now() - updatedAt > 2 * 864e5
+  const now = useNow()
+  const stale = !updatedAt || now - updatedAt > 2 * 864e5
   const preview = mode === "preview"
   const tone = preview || stale ? "warn" : "good"
   const label = preview ? "Sample data" : updatedAt ? `Updated ${ago(updatedAt)}` : "Not updated yet"
@@ -114,6 +116,8 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
   /* routing: the URL decides the page; a new page fades in, and the scroll goes back to the top */
   useEffect(() => {
+    // follows the URL (an outside source) into page state; one extra render per navigation
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setNavPage(page)
     setLeaving(false)
     document.getElementById("main")?.scrollTo(0, 0)
@@ -122,13 +126,14 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   useEffect(() => () => window.clearTimeout(leaveTimer.current), [])
 
   useEffect(() => {
-    const on = () => setNarrow(window.innerWidth <= 760)
+    const on = () => {
+      const n = window.innerWidth <= 760
+      setNarrow(n)
+      if (n) setCollapsed(true)   // a narrow window always starts with the sidebar folded away
+    }
     window.addEventListener("resize", on)
     return () => window.removeEventListener("resize", on)
   }, [])
-  useEffect(() => {
-    if (narrow) setCollapsed(true)
-  }, [narrow])
 
   /* theme: an explicit choice here wins; "system" defers to the viewer, then the OS */
   useEffect(() => {
@@ -302,7 +307,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                     <TooltipContent side="right">Collapse sidebar</TooltipContent>
                   </Tooltip>
                   <span className="min-w-0 flex-1 truncate pl-1.5 text-[0.95rem] leading-none tracking-tight duration-200 animate-in fade-in">
-                    <b className="font-semibold text-sidebar-strong">AICD3</b> <span className="font-normal text-sidebar-fg">Launchpad</span>
+                    <b className="font-semibold text-sidebar-strong">AICD3</b> <span className="font-normal text-sidebar-fg">Job Board</span>
                   </span>
                   <Tooltip>
                     <TooltipTrigger asChild>
@@ -399,7 +404,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             {/* sticky top bar: where you are, how fresh the data is, and the ⌘K search */}
             <header className="sticky top-0 z-30 flex h-12 items-center gap-3 border-b border-border/70 bg-background/60 px-4 backdrop-blur-xl backdrop-saturate-150 sm:px-6 lg:px-9">
               <nav aria-label="Breadcrumb" className="flex min-w-0 items-center gap-1.5 text-sm">
-                <span className="hidden text-muted-foreground sm:inline">AICD3 Launchpad</span>
+                <span className="hidden text-muted-foreground sm:inline">AICD3 Job Board</span>
                 <ChevronRight className="hidden size-3.5 text-muted-foreground/60 sm:inline" />
                 <span className="truncate font-medium">{PAGE_LABEL[navPage]}</span>
                 {studentView && <span className="ml-1 rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">Student view</span>}

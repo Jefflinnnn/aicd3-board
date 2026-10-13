@@ -8,7 +8,8 @@
  * - a recent-activity feed (Vercel deployments, Linear inbox)
  * - a layout each person can reorder and trim (Baseten's customizable metrics page)
  */
-import { useLayoutEffect, useRef, useState } from "react"
+import { useId, useLayoutEffect, useRef, useState } from "react"
+import { useNow } from "@/lib/useNow"
 import { ArrowDown, ArrowRight, ArrowUp, Check, EyeOff, GripVertical, Plus, RotateCcw, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
@@ -24,7 +25,7 @@ export function Sparkline({ values, className, label }: { values: number[]; clas
   const min = Math.min(0, ...values)
   const pts = values.map((v, i) => [(i / Math.max(1, values.length - 1)) * 100, 28 - ((v - min) / (max - min || 1)) * 24] as const)
   const line = pts.map(([x, y], i) => `${i ? "L" : "M"}${x.toFixed(2)},${y.toFixed(2)}`).join(" ")
-  const id = useRef("sp" + Math.random().toString(36).slice(2, 8)).current
+  const id = "sp" + useId().replace(/[^a-zA-Z0-9]/g, "")
   return (
     <svg viewBox="0 0 100 30" preserveAspectRatio="none" className={cn("h-9 w-full overflow-visible", className)} role="img" aria-label={label}>
       <defs>
@@ -223,7 +224,7 @@ export function StartCard() {
           ))}
         </ul>
       ) : (
-        <p className="py-6 text-center text-sm text-muted-foreground">Save roles with a deadline and they'll line up here.</p>
+        <p className="py-6 text-center text-sm text-muted-foreground">Save roles with a deadline and they’ll line up here.</p>
       )}
       {hidden && done < steps.length && (
         <button className="mt-auto self-start pt-2 text-xs text-muted-foreground hover:text-foreground" onClick={() => { setHidden(false); store.set("checklistHidden", false) }}>Show the getting-started list</button>
@@ -242,6 +243,7 @@ const since = (t: number) => {
   return d < 30 ? `${d}d` : `${Math.round(d / 30)}mo`
 }
 export function ActivityCard() {
+  const now = useNow()
   const { jobs, openJob, isNew } = useApp()
   const events = [
     ...jobs.map((j) => ({ j, t: j.addedAt ?? parse(j.posted).getTime() + 9 * 36e5, kind: "new" as const })),
@@ -249,7 +251,7 @@ export function ActivityCard() {
       .filter((j) => j.deadline && parse(j.deadline) < TODAY && diffDays(TODAY, parse(j.deadline)) <= 21)
       .map((j) => ({ j, t: addDays(parse(j.deadline), 1).getTime(), kind: "closed" as const })),
   ]
-    .filter((e) => e.t <= Date.now())
+    .filter((e) => e.t <= now)
     .sort((a, b) => b.t - a.t)
     .slice(0, 6)
   return (
@@ -291,8 +293,13 @@ export function Arranger({ sections, order, hidden, editing, onChange }: { secti
   const els = useRef<Record<string, HTMLElement | null>>({})
   const tops = useRef<Record<string, number>>({})
   const [dragging, setDragging] = useState<string | null>(null)
+  // while dragging, the order lives here and is saved once on drop (not on every swap)
+  const [draft, setDraft] = useState<string[] | null>(null)
+  // no new swap until the last one has finished gliding, so moving sections can't swap straight back
+  const settleUntil = useRef(0)
   const byId = Object.fromEntries(sections.map((s) => [s.id, s]))
-  const visible = order.filter((id) => !hidden.includes(id) && byId[id])
+  const current = draft ?? order
+  const visible = current.filter((id) => !hidden.includes(id) && byId[id])
 
   // glide sections to their new places whenever the order changes (FLIP)
   useLayoutEffect(() => {
@@ -319,13 +326,26 @@ export function Arranger({ sections, order, hidden, editing, onChange }: { secti
     ;[o[a], o[b]] = [o[b], o[a]]
     onChange(o, hidden)
   }
-  const dragOver = (overId: string) => {
-    if (!dragging || dragging === overId) return
-    const o = order.filter((x) => x !== dragging)
-    const at = o.indexOf(overId)
-    const from = order.indexOf(dragging), to = order.indexOf(overId)
-    o.splice(from < to ? at + 1 : at, 0, dragging)
-    onChange(o, hidden)
+  const dragOver = (overId: string, clientY: number, at: number) => {
+    if (!dragging || dragging === overId || at < settleUntil.current) return
+    const el = els.current[overId]
+    if (!el) return
+    // top half of a section: drop before it; bottom half: after it. Sections of very different
+    // heights then settle instead of swapping back and forth under the cursor.
+    const r = el.getBoundingClientRect()
+    const before = clientY < r.top + r.height / 2
+    const o = current.filter((x) => x !== dragging)
+    o.splice(o.indexOf(overId) + (before ? 0 : 1), 0, dragging)
+    if (o.every((x, k) => x === current[k])) return
+    settleUntil.current = at + 340
+    setDraft(o)
+  }
+  const ended = useRef(false)   // drop and dragend both fire; save once
+  const endDrag = () => {
+    if (!ended.current && draft && draft.some((x, k) => x !== order[k])) onChange(draft, hidden)
+    ended.current = true
+    setDraft(null)
+    setDragging(null)
   }
 
   return (
@@ -334,16 +354,16 @@ export function Arranger({ sections, order, hidden, editing, onChange }: { secti
         <div
           key={id}
           ref={(el) => { els.current[id] = el }}
-          onDragOver={(e) => { if (editing && dragging) { e.preventDefault(); dragOver(id) } }}
-          onDrop={(e) => { e.preventDefault(); setDragging(null) }}
+          onDragOver={(e) => { if (editing && dragging) { e.preventDefault(); e.dataTransfer.dropEffect = "move"; dragOver(id, e.clientY, e.timeStamp) } }}
+          onDrop={(e) => { e.preventDefault(); endDrag() }}
           className={cn("relative rounded-lg transition-[box-shadow,opacity] duration-200", editing && "outline-dashed outline-1 outline-offset-[6px] outline-border", dragging === id && "opacity-50")}
         >
           {editing && (
             <div className="mb-2 flex items-center gap-2 duration-200 animate-in fade-in slide-in-from-top-1">
               <span
                 draggable
-                onDragStart={(e) => { setDragging(id); e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", id) }}
-                onDragEnd={() => setDragging(null)}
+                onDragStart={(e) => { ended.current = false; setDragging(id); setDraft(order); e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", id) }}
+                onDragEnd={endDrag}
                 className="flex cursor-grab items-center gap-1.5 rounded-md border bg-card px-2 py-1 text-xs font-medium shadow-sm active:cursor-grabbing"
                 title="Drag to move"
               >

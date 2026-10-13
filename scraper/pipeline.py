@@ -17,7 +17,8 @@ One command from career sites to the job board:
 
 The app's ingest token comes from AICD3_INGEST_TOKEN, or SCRAPER_INGEST_TOKEN in .env.local / .env
 (the same value the app reads). Every run leaves scraper/out/pipeline/ with the import file and a
-fit report (fit.csv) listing every posting, its decision and why.
+fit report (fit.csv) listing every posting, its decision and why, and a full log of the run in
+scraper/out/logs/ (the last 30 runs are kept; AICD3_LOG_FILE picks another path).
 """
 from __future__ import annotations
 
@@ -27,6 +28,8 @@ import json
 import logging
 import os
 import sys
+import time
+import traceback
 from datetime import datetime
 
 import requests
@@ -60,6 +63,14 @@ def build_records(postings: list[pi.Posting], clf: Classifier) -> tuple[list[dic
     """Import records for the app, and one report row per posting."""
     records, report = [], []
     for p in postings:
+        if pi.undergrad_only(p.title, p.description):
+            # UCSF students are graduate and professional students: undergraduate-only roles and co-ops are
+            # left out (and moved to the bin if an earlier run published them), without asking the classifier
+            report.append({"decision": "undergrad", "computational": "", "category": "", "category_p": "",
+                           "backend": "rules", "company": p.company, "title": p.title, "url": p.url,
+                           "note": "undergraduate only"})
+            records.append({**pi.to_import_record(p), "fit": "no"})
+            continue
         v = clf.classify(p.title, p.company, p.description)
         report.append({"decision": v.decision, "computational": v.computational, "category": v.category,
                        "category_p": v.category_p, "backend": v.backend, "company": p.company, "title": p.title,
@@ -83,9 +94,18 @@ def build_records(postings: list[pi.Posting], clf: Classifier) -> tuple[list[dic
 
 def ingest(url: str, token: str, records: list[dict], dry_run: bool) -> dict:
     qs = f"?dryRun={int(dry_run)}&closeMissing=1&reviewAll=0"
-    r = requests.post(url.rstrip("/") + "/api/ingest" + qs, timeout=300,
-                      data=json.dumps({"postings": records}, ensure_ascii=False).encode("utf-8"),
-                      headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
+    body = json.dumps({"postings": records}, ensure_ascii=False).encode("utf-8")
+    print(f"POST {url.rstrip('/')}/api/ingest{qs}  ({len(body) / 1e6:.1f} MB)", flush=True)
+    started = time.monotonic()
+    try:
+        r = requests.post(url.rstrip("/") + "/api/ingest" + qs, timeout=300, data=body,
+                          headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
+    except requests.ConnectionError as e:
+        raise SystemExit(f"Import failed: couldn't reach the app at {url} ({e.__class__.__name__}). "
+                         "Is it running (pnpm dev / pnpm start), and on that address?")
+    except requests.Timeout:
+        raise SystemExit(f"Import failed: the app at {url} didn't answer within 5 minutes.")
+    print(f"answered HTTP {r.status_code} in {time.monotonic() - started:.1f}s", flush=True)
     try:
         data = r.json()
     except ValueError:
@@ -93,11 +113,102 @@ def ingest(url: str, token: str, records: list[dict], dry_run: bool) -> dict:
     if r.status_code != 200:
         hint = {401: " (the token doesn't match the app's SCRAPER_INGEST_TOKEN)",
                 503: " (the app has no SCRAPER_INGEST_TOKEN set; add it and restart the app)"}.get(r.status_code, "")
-        raise SystemExit(f"Import failed: HTTP {r.status_code} {data.get('error', '')}{hint}")
+        raise SystemExit(f"Import failed: HTTP {r.status_code} {data.get('error', '') or r.text[:500]}{hint}")
     return data
 
 
+LOG_DIR = os.path.join(ROOT, "scraper", "out", "logs")
+KEEP_LOGS = 30
+_step = {"name": "starting", "at": time.monotonic(), "t0": time.monotonic()}
+
+
+class _Tee:
+    """Writes everything printed (prints, logging, tracebacks) to the console and the run's log file."""
+    def __init__(self, stream, f):
+        self.stream, self.f = stream, f
+
+    def write(self, s):
+        self.stream.write(s)
+        try:
+            self.f.write(s)
+            self.f.flush()
+        except (OSError, ValueError):
+            pass
+        return len(s)
+
+    def flush(self):
+        self.stream.flush()
+
+    def __getattr__(self, name):
+        return getattr(self.stream, name)
+
+
+def _open_log() -> str:
+    path = os.environ.get("AICD3_LOG_FILE") or os.path.join(LOG_DIR, f"pipeline-{datetime.now():%Y%m%d-%H%M%S}.log")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    f = open(path, "a", encoding="utf-8", buffering=1)
+    if isinstance(sys.stdout, _Tee):   # called again in the same process (tests): switch files
+        try:
+            sys.stdout.f.close()
+        except OSError:
+            pass
+        sys.stdout.f = sys.stderr.f = f
+    else:
+        sys.stdout, sys.stderr = _Tee(sys.stdout, f), _Tee(sys.stderr, f)
+    try:   # keep the newest KEEP_LOGS
+        old = sorted(n for n in os.listdir(LOG_DIR) if n.startswith("pipeline-") and n.endswith(".log"))
+        for n in old[:-KEEP_LOGS]:
+            os.remove(os.path.join(LOG_DIR, n))
+    except OSError:
+        pass
+    return path
+
+
+def _mins(sec: float) -> str:
+    return f"{int(sec // 60)}m {int(sec % 60):02d}s"
+
+
+def step(name: str, detail: str = "") -> None:
+    """Marks the start of a stage, so a log shows how far a run got and how long each stage took."""
+    now = time.monotonic()
+    if _step["name"] != "starting":
+        print(f"[step] {_step['name']} done in {_mins(now - _step['at'])}", flush=True)
+    _step.update(name=name, at=now)
+    print(f"\n[step] {name}{' - ' + detail if detail else ''}  ({datetime.now():%H:%M:%S})", flush=True)
+
+
 def main(argv: list[str] | None = None) -> int:
+    log_path = _open_log()
+    print(f"[run] pipeline started {datetime.now():%Y-%m-%d %H:%M:%S}  python {sys.version.split()[0]}  "
+          f"args: {' '.join(argv if argv is not None else sys.argv[1:]) or '(none)'}", flush=True)
+    print(f"[run] full log: {log_path}", flush=True)
+    try:
+        code = _main(argv)
+    except KeyboardInterrupt:
+        print(f"\n[run] STOPPED during step: {_step['name']}", flush=True)
+        raise
+    except SystemExit as e:   # argparse errors, "Import failed: ..." and other deliberate exits
+        code = e.code if isinstance(e.code, int) else 1
+        if code:
+            if e.code and not isinstance(e.code, int):
+                print(f"[error] {e.code}", file=sys.stderr, flush=True)
+            print(f"\n[run] FAILED during step: {_step['name']} (exit {code})", flush=True)
+            print(f"[run] full log: {log_path}", flush=True)
+        return code
+    except Exception as e:
+        traceback.print_exc()
+        print(f"\n[run] FAILED during step: {_step['name']}: {type(e).__name__}: {e}", flush=True)
+        print(f"[run] full log: {log_path}", flush=True)
+        return 1
+    total = _mins(time.monotonic() - _step["t0"])
+    print(f"[step] {_step['name']} done in {_mins(time.monotonic() - _step['at'])}", flush=True)
+    print(f"\n[run] {'finished' if code == 0 else 'finished with problems (some companies could not be scraped)'} "
+          f"in {total} (exit {code})", flush=True)
+    print(f"[run] full log: {log_path}", flush=True)
+    return code
+
+
+def _main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--companies", nargs="+", help="subset (case-insensitive substring), default all")
     ap.add_argument("--classifier", choices=["auto", "d3", "rules"], default="auto")
@@ -122,12 +233,13 @@ def main(argv: list[str] | None = None) -> int:
         if not names:
             ap.error(f"no company matches {args.companies}")
 
-    # 1. scrape
+    step("1/4 scrape", f"{len(names)} companies: {', '.join(names)}")
     client = pi.PoliteClient()
     postings, status = pi.run(names, details=True, us_only=True, client=client, workers=max(1, min(args.workers, 6)),
                               ignore_robots=True)
-    # 2. classify
+    step("2/4 classify", f"{len(postings)} postings")
     clf = Classifier(args.classifier)
+    print(f"classifier: {clf.name}", flush=True)
     records, report = build_records(postings, clf)
     clf.save()
 
@@ -139,15 +251,16 @@ def main(argv: list[str] | None = None) -> int:
         w.writeheader()
         w.writerows(sorted(report, key=lambda r: (r["decision"], r["company"], r["title"])))
 
-    # 3. import
+    step("3/4 import", f"{len(records)} records to {args.url}{' (dry run)' if args.dry_run else ''}")
     data = ingest(args.url, token, records, args.dry_run)
 
-    counts = {d: sum(1 for r in report if r["decision"] == d) for d in ("publish", "review", "skip")}
+    counts = {d: sum(1 for r in report if r["decision"] == d) for d in ("publish", "review", "skip", "undergrad")}
     print(f"\n{datetime.now():%Y-%m-%d %H:%M}  classifier: {clf.name}")
     for name, s in status.items():
         print(f"  {name:<24} {s}")
     print(f"\n{len(postings)} US internships scraped: {counts['publish']} computational, {counts['review']} unsure "
-          f"(to review), {counts['skip']} left out as not ML/automation-focused (see fit.csv)")
+          f"(to review), {counts['skip']} left out as not ML/automation-focused, "
+          f"{counts['undergrad']} left out as undergraduate-only (see fit.csv)")
     print(("Dry run, nothing saved: " if args.dry_run else "Database: ") +
           f"{data['added']} published, {data['staged']} to review, {data['updated']} updated, "
           f"{data['closed']} closed, {data['unchanged']} unchanged, {data['rejected']} previously rejected, "
@@ -157,12 +270,22 @@ def main(argv: list[str] | None = None) -> int:
 
     # 4. check what's still open
     checked = None
+    checked_error = None
     if not args.no_check and not args.dry_run:
+        step("4/4 re-check open postings")
         import check_open
         os.environ["AICD3_INGEST_TOKEN"] = token
         print("\nRe-checking open postings…", flush=True)
         report_path = os.path.join(args.out, "check_open.json")
-        check_open.main(["--apply", "--url", args.url, "--report", report_path])
+        try:   # the postings are already imported; a problem here shouldn't lose the run's results
+            rc = check_open.main(["--apply", "--url", args.url, "--report", report_path])
+            if rc:
+                print(f"[warning] re-check stopped early (exit {rc}); see the lines above", flush=True)
+                checked_error = f"exit {rc}"
+        except Exception as e:
+            traceback.print_exc()
+            print(f"[warning] re-check failed: {type(e).__name__}: {e}. The import above was saved.", flush=True)
+            checked_error = f"{type(e).__name__}: {e}"
         try:
             with open(report_path, encoding="utf-8") as f:
                 res = json.load(f)
@@ -174,7 +297,7 @@ def main(argv: list[str] | None = None) -> int:
         with open(args.summary_json, "w", encoding="utf-8") as f:
             json.dump({"classifier": clf.name, "scraped": len(postings), **counts,
                        "database": {k: data.get(k, 0) for k in ("added", "staged", "updated", "closed", "unchanged", "rejected", "dropped", "unlisted")},
-                       "errors": len(data.get("errors", [])), "checked": checked,
+                       "errors": len(data.get("errors", [])), "checked": checked, "checkError": checked_error,
                        "companies": status, "failed": bad}, f)
     return 2 if bad else 0
 

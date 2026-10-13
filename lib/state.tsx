@@ -44,15 +44,19 @@ export interface JobFilters {
   type: string[]
   deadline: DeadlineFilter
   status: StatusFilter
+  /** only postings added since this person's previous visit (the dashboard's "new since" link) */
+  newOnly?: boolean
 }
 export const EMPTY_FILTERS: JobFilters = { company: [], location: [], category: [], type: [], deadline: "", status: "live" }
 /** "state:CA" in the location filter matches every site in that state */
 export const STATE_PREFIX = "state:"
+/** "region:bay" in the location filter matches every Bay Area site (isBayArea in lib/data.ts) */
+export const BAY_AREA = "region:bay"
 /**
- * What the job board shows on a first visit: the program's focus (drug discovery and development)
- * in California. Students can widen or clear these; Reset comes back here.
+ * What the job board shows on a first visit: live drug discovery and development roles in the
+ * Bay Area. Students can widen or clear these; Reset comes back here.
  */
-export const DEFAULT_FILTERS: JobFilters = { ...EMPTY_FILTERS, category: ["discovery", "development"], location: [STATE_PREFIX + "CA"] }
+export const DEFAULT_FILTERS: JobFilters = { ...EMPTY_FILTERS, category: ["discovery", "development"], location: [BAY_AREA], status: "live" }
 
 export type BoardTab = "todo" | "saved" | "done"
 

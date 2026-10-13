@@ -75,6 +75,8 @@ export function normalizeLocation(raw: string): string {
     if (c.length === 3 && US.test(c[1]) && stateCode(c[2])) return `${city(c[0])}, ${stateCode(c[2])}`
     // "Cambridge, United States"
     if (c.length === 2 && US.test(c[1])) return c[0]
+    // "CA, Santa Clara" (NVIDIA's "US, CA, Santa Clara" once the country is gone): state first, city last
+    if (c.length === 2 && stateCode(c[0]) && !stateCode(c[1])) return `${city(c[1])}, ${stateCode(c[0])}`
     return loc
   }
 

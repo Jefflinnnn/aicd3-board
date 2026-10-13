@@ -9,6 +9,9 @@ import classify as c
 import pharma_internships as pi
 import pipeline
 
+# pipeline.main() writes a run log; keep the tests' logs out of the real scraper/out/logs/
+os.environ["AICD3_LOG_FILE"] = os.path.join(tempfile.mkdtemp(prefix="aicd3-test-logs-"), "pipeline-test.log")
+
 
 class AnswerShapes(unittest.TestCase):
     """d3-flash's card doesn't pin down the answer format, so accept the plausible ones."""
@@ -106,6 +109,16 @@ class Pipeline(unittest.TestCase):
         self.assertIn("Unsure ML or computational automation is central", recs[1]["review_reason"])
         self.assertEqual(recs[0]["locations"], ["Foster City, CA"])
         self.assertEqual(recs[0]["company"], "gilead")
+
+    def test_undergrad_only_left_out(self):
+        mk = lambda t, d: pi.Posting(company="Gilead Sciences", title=t, url="https://x/" + t.replace(" ", "_"), description=d)
+        ps = [mk("Co-op - Machine Learning, Drug Discovery", "Build ML models for target discovery. Open to undergraduates."),
+              mk("Intern - Pharmacometrics", "Automate PK/PD modeling in Python. Currently pursuing a Bachelor's degree in data science."),
+              mk("Intern - Pharmacometrics ML", "Automate PK/PD modeling in Python. Currently enrolled in a PhD or PharmD program.")]
+        recs, report = pipeline.build_records(ps, c.Classifier("rules", cache_path=None))
+        self.assertEqual([r["decision"] for r in report][:2], ["undergrad", "undergrad"])
+        self.assertNotEqual(report[2]["decision"], "undergrad")
+        self.assertEqual([r.get("fit") for r in recs][:2], ["no", "no"])   # so the app bins any already listed
 
     def test_token_from_env_file(self):
         with tempfile.TemporaryDirectory() as d:

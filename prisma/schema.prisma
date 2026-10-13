@@ -1,4 +1,4 @@
-// AICD3 Launchpad database.
+// AICD3 Job Board database.
 //
 // People sign in through Neon Auth (Google). Neon Auth keeps its own tables in the
 // `neon_auth` schema; this app keeps one Profile per signed-in person, keyed by the

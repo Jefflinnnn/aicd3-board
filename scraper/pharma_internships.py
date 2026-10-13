@@ -106,7 +106,17 @@ COMPANIES: dict[str, dict] = {
     "Eli Lilly":            {"id": "lilly", "platform": "workday",
                              # CMP used to be student-only; since Oct 2026 it lists every kind of job, so filter it too
                              "boards": [("lilly", "wd115", "CMP"), ("lilly", "wd115", "LLY")],
-                             "alt_hosts": ["wd5"]},
+                             "alt_hosts": ["wd5"],
+                             # wd115 sits behind Cloudflare, which challenges Python's own TLS handshake (a real
+                             # browser gets through with no check): talk to it the way Chrome does (curl_cffi)
+                             "impersonate": True,
+                             # if Workday still refuses: the same boards through headless Chromium (Playwright; the
+                             # US internships are all on CMP), then careers.lilly.com (Phenom), which mirrors only
+                             # the LLY board, with the same R-numbers
+                             "fallback": [{"platform": "workday_browser", "label": "headless browser",
+                                           "boards": [("lilly", "wd115", "CMP"), ("lilly", "wd115", "LLY")]},
+                                          {"platform": "phenom", "base": "https://careers.lilly.com", "path": "/us/en",
+                                           "terms": ["intern", "internship", "co-op"]}]},
     "Revolution Medicines": {"id": "revmed", "platform": "greenhouse", "token": "revolutionmedicines"},
     "Gilead Sciences":      {"id": "gilead", "platform": "workday", "boards": [("gilead", "wd1", "gileadcareers")]},
     "Novartis":             {"id": "novartis", "platform": "workday", "boards": [("novartis", "wd3", "Novartis_Careers")]},
@@ -116,6 +126,12 @@ COMPANIES: dict[str, dict] = {
     "insitro":              {"id": "insitro", "platform": "ashby", "org": "insitro"},
     "Takeda":               {"id": "takeda", "platform": "workday", "boards": [("takeda", "wd502", "External")],
                              "alt_hosts": ["wd3"]},
+    # A tech company with hundreds of internships a year, most of them chips, graphics and systems:
+    # only keep the ones that mention healthcare or the life sciences ("require", on title + description).
+    "NVIDIA":               {"id": "nvidia", "platform": "workday", "boards": [("nvidia", "wd5", "NVIDIAExternalCareerSite")],
+                             "require": r"(?<![A-Za-z])(health\s?care|life sciences?|biolog\w*|bioinformatic\w*|biotech\w*|"
+                                        r"pharma\w*|drug|molecul\w*|protein\w*|genom\w*|chemistry|cheminformatic\w*|"
+                                        r"medical|medicine|clinical|biomedical|BioNeMo|Clara|MONAI|Parabricks)(?![A-Za-z])"},
 }
 
 # Titles that count as internships. Letter boundaries keep out "International"/"Internal"
@@ -228,14 +244,24 @@ class PoliteClient:
         head = resp.text[:20000].lower() if "html" in ctype else ""
         if any(m in head or m in (resp.url or "").lower() for m in MAINTENANCE_MARKERS):
             raise UnavailableError(f"{resp.request.method} {resp.url} -> the site is down for maintenance; try again later.")
-        hard_marker = any(m in head for m in ("cf-chl", "challenge-platform", "px-captcha",
-                                              "_incapsula_resource", "g-recaptcha", "hcaptcha"))
-        soft_marker = any(m in head for m in BLOCK_MARKERS)
-        if resp.status_code in (401, 403) or hard_marker or (
-                resp.status_code in (429, 503) and soft_marker):
+        # A real challenge page: Cloudflare's "Just a moment..." interstitial (it loads
+        # /cdn-cgi/challenge-platform/.../orchestrate/... and sets cf-mitigated), PerimeterX or Incapsula block
+        # pages. Cloudflare also adds a background script (/cdn-cgi/challenge-platform/scripts/jsd/main.js) to
+        # ordinary pages that loaded fine, e.g. Eli Lilly's Workday: on a 200 answer that is not a block.
+        status = resp.status_code
+        interstitial = next((m for m in ("<title>just a moment", "_cf_chl_opt", "challenge-platform/h/",
+                                         "/orchestrate/", "cf-browser-verification",
+                                         "px-captcha", "_incapsula_resource") if m in head), None)
+        if resp.headers.get("cf-mitigated", "").lower() == "challenge":
+            interstitial = "cf-mitigated: challenge"
+        widget = next((m for m in ("cf-chl", "challenge-platform", "g-recaptcha", "hcaptcha") if m in head), None)
+        soft_marker = next((m for m in BLOCK_MARKERS if m in head), None)
+        why = ("HTTP %d" % status if status in (401, 403) else interstitial
+               or (widget if status != 200 else None) or (soft_marker if status in (429, 503) else None))
+        if why:
             server = resp.headers.get("Server", "?")
             raise BlockedError(
-                f"{resp.request.method} {resp.url} -> HTTP {resp.status_code} (server: {server}). "
+                f"{resp.request.method} {resp.url} -> HTTP {status} (server: {server}; {why}). "
                 "The site returned a bot challenge/WAF block. Slow down, try the sitemap fallback, "
                 "or run with --manual-session to complete the check in a real browser."
             )
@@ -282,11 +308,105 @@ class PoliteClient:
             browser.close()
 
 
+    def impersonating(self) -> "PoliteClient":
+        """A client that connects the way Chrome does (TLS and HTTP/2 fingerprint, via curl_cffi), for sites
+        behind Cloudflare-style bot checks that refuse Python's own handshake even when a real browser gets
+        straight through. Same pacing, cookies and block detection. Without curl_cffi installed, returns
+        this client unchanged and says so."""
+        try:
+            from curl_cffi import requests as creq
+        except ImportError:
+            log.warning("curl_cffi isn't installed, so this site gets Python's own handshake and may refuse it: "
+                        "pip install -r scraper/requirements.txt")
+            return self
+        c = ImpersonatingClient(self.min_delay, self.max_delay, timeout=self.timeout)
+        c.csession = creq.Session(impersonate="chrome")
+        c.csession.cookies.update(self.session.cookies.get_dict())
+        return c
+
+
+class ImpersonatingClient(PoliteClient):
+    """PoliteClient over curl_cffi (Chrome's handshake). Responses come back as ordinary
+    requests.Response objects and errors as requests exceptions, so every scraper works unchanged."""
+    csession = None
+    RETRY_STATUS = (429, 500, 502, 503, 504)
+
+    def _send(self, method: str, url: str, **kw) -> requests.Response:
+        from curl_cffi.requests.exceptions import RequestException as CurlError
+        kw.setdefault("timeout", self.timeout)
+        kw.pop("allow_redirects", None)
+        # Chrome sends its own User-Agent and Accept-Language; keep the caller's Accept/JSON headers
+        headers = {k: v for k, v in (kw.pop("headers", None) or {}).items() if k.lower() != "user-agent"}
+        for attempt in range(4):
+            try:
+                cr = self.csession.request(method, url, headers=headers, **kw)
+            except CurlError as e:
+                if attempt == 3:
+                    raise requests.ConnectionError(f"{method} {url}: {e}") from e
+                time.sleep(2 ** attempt + random.random())
+                continue
+            if cr.status_code in self.RETRY_STATUS and attempt < 3:
+                time.sleep(float(cr.headers.get("Retry-After") or 2 ** (attempt + 1)) + random.random())
+                continue
+            return self._to_requests(method, cr)
+        raise requests.ConnectionError(f"{method} {url}: no answer")   # pragma: no cover
+
+    @staticmethod
+    def _to_requests(method: str, cr) -> requests.Response:
+        r = requests.Response()
+        r.status_code = cr.status_code
+        r._content = cr.content
+        r.headers = requests.structures.CaseInsensitiveDict(dict(cr.headers))
+        r.url = str(cr.url)
+        r.encoding = None
+        r.request = requests.Request(method, str(cr.url)).prepare()
+        r.reason = getattr(cr, "reason", "") or ""
+        return r
+
+    def request(self, method: str, url: str, **kw) -> requests.Response:
+        self._pace(url)
+        resp = self._send(method, url, **kw)
+        self._check_block(resp)
+        return resp
+
+    def probe(self, url: str, **kw) -> requests.Response:
+        self._pace(url)
+        resp = self._send("GET", url, **kw)
+        self._check_block(resp)
+        return resp
+
+    def clone(self) -> "PoliteClient":
+        return self
+
+
 # --------------------------------------------------------------------------------------
 # Helpers
 # --------------------------------------------------------------------------------------
 def is_internship(title: str) -> bool:
     return bool(INTERN_RE.search(title or "")) and not NOT_INTERN_RE.search(title or "")
+
+
+# The board serves UCSF graduate and professional students, so postings only undergraduates (or high
+# schoolers) can take are left out. Co-ops in the US are undergraduate programmes unless they say otherwise.
+UNDERGRAD_TITLE_RE = re.compile(r"(?<![A-Za-z])(co[-\s]?op|undergrad(?:uate)?s?|bachelor'?s?|high[-\s]school)(?![A-Za-z])", re.I)
+UNDERGRAD_TEXT_RE = re.compile(
+    r"(?<![A-Za-z])(undergrad(?:uate)?s?|bachelor'?s?\s+(?:degree\s+)?(?:program|programme|student|candidate)|"
+    r"(?:pursuing|enrolled in|working toward)\s+(?:a\s+|an\s+|your\s+)?(?:b\.?s\.?|b\.?a\.?|bachelor'?s?)|"
+    r"rising\s+(?:sophomore|junior|senior)s?|sophomores?|freshm[ae]n|high[-\s]school\s+students?)(?![A-Za-z])", re.I)
+GRAD_RE = re.compile(
+    r"(?<![A-Za-z])((?<!under)graduate\s+(?:student|program|programme|degree|school|level|studies|candidate)s?|"
+    r"grad\s+students?|master'?s|masters|m\.s\.|ms\s+(?:student|degree|program|candidate)s?|ph\.?\s?d\.?s?|"
+    r"doctora(?:l|te)|pharm\.?\s?d\.?|m\.?d\.?/ph\.?d|mba|m\.?p\.?h\.?|professional\s+(?:school|degree)\s+students?|"
+    r"advanced\s+degree|post-?doc\w*)(?![A-Za-z])", re.I)
+
+
+def undergrad_only(title: str, description: str = "") -> bool:
+    """True for a posting only undergraduates (or high schoolers) can take: an undergraduate or co-op title,
+    or a description that asks for undergraduates, with no mention of graduate, PhD, PharmD, MD or MBA students."""
+    title, description = title or "", description or ""
+    if GRAD_RE.search(title) or GRAD_RE.search(description):
+        return False
+    return bool(UNDERGRAD_TITLE_RE.search(title) or UNDERGRAD_TEXT_RE.search(description))
 
 
 def clean(text: str | None) -> str:
@@ -464,6 +584,7 @@ def normalize_location(raw: str, us: bool = False) -> str:
     "US - New Jersey - Rahway" -> "Rahway, NJ"; "US - Frederick - MD" -> "Frederick, MD";
     "Princeton - NJ - US" -> "Princeton, NJ"; "US, Indianapolis IN" -> "Indianapolis, IN";
     "Redwood City, California, United States" -> "Redwood City, CA"; "Columbus, United States, Ohio" -> "Columbus, OH";
+    "US, CA, Santa Clara" -> "Santa Clara, CA";
     "North Chicago IL" -> "North Chicago, IL"; with us=True (the site says the job is in the US),
     "SLEEPY HOLLOW" -> "Sleepy Hollow, NY" for known US sites;
     "United States - Remote" -> "Remote (US)"; "Germany - Ingelheim" -> "Ingelheim, Germany". Else unchanged."""
@@ -495,6 +616,8 @@ def normalize_location(raw: str, us: bool = False) -> str:
             return f"{_city(c[0])}, {_state(c[2])}"
         if len(c) == 2 and _US.match(c[1]):
             return normalize_location(c[0], True)
+        if len(c) == 2 and _state(c[0]) and not _state(c[1]):          # "CA, Santa Clara" (NVIDIA: "US, CA, Santa Clara")
+            return f"{_city(c[1])}, {_state(c[0])}"
         return loc
     m = re.match(r"^(.+?)\s+([A-Za-z]{2})$", loc)
     if m and m.group(2).upper() in _CODES and re.search(r"[a-z]", m.group(1)):
@@ -650,19 +773,16 @@ def scrape_workday(client: PoliteClient, company: str, cfg: dict, details: bool)
         host = resolve_workday_host(client, tenant, host, site, cfg.get("alt_hosts", []))
         board, _ = workday_urls(tenant, host, site)
         everything = bool(opts.get("all"))     # a student-only board: take every posting on it
+        log.info("   %s: searching %s", company, board)
         try:
             for term in ([""] if everything else cfg.get("terms", WORKDAY_TERMS)):
+                before = len(out)
                 for jp in workday_search(client, tenant, host, site, term):
                     title, path = jp.get("title", ""), jp.get("externalPath", "")
                     if not path or path in out or not (everything or is_internship(title)):
                         continue
-                    bullets = jp.get("bulletFields") or []
-                    out[path] = Posting(
-                        company=company, title=clean(title),
-                        location=clean(jp.get("locationsText")),
-                        posted=clean(jp.get("postedOn")),
-                        req_id=bullets[0] if bullets else "",
-                        url=f"{board}{path}", source=f"workday:{tenant}/{site}")
+                    out[path] = workday_listing(company, board, tenant, site, jp)
+                log.info("   %s: %s %r: %d new internship listings", company, site, term or "(everything)", len(out) - before)
         except UnavailableError:
             raise
         except (BlockedError, requests.HTTPError) as e:
@@ -673,25 +793,121 @@ def scrape_workday(client: PoliteClient, company: str, cfg: dict, details: bool)
                     out[p.url] = p
             continue
         if details:
-            for path, p in out.items():
-                if not p.source.startswith(f"workday:{tenant}/{site}"):
-                    continue
+            mine = [(path, p) for path, p in out.items() if p.source.startswith(f"workday:{tenant}/{site}")]
+            for k, (path, p) in enumerate(mine, 1):
+                if k == 1 or k % 10 == 0 or k == len(mine):
+                    log.info("   %s: %s details %d/%d", company, site, k, len(mine))
                 try:
-                    info = workday_detail(client, tenant, host, site, path)
-                    p.req_id = info.get("jobReqId", p.req_id)
-                    p.location = info.get("location", p.location)
-                    p.locations = [x for x in [info.get("location"), *(info.get("additionalLocations") or [])] if x]
-                    p.start_date = info.get("startDate", "") or ""
-                    if p.start_date:
-                        p.posted = p.start_date[:10]
-                    p.deadline = sane_deadline(info.get("endDate") or "")   # "Posting end date" when the tenant sets one
-                    p.extra = {"startDate": p.start_date,
-                               "timeType": info.get("timeType", ""),
-                               "remoteType": info.get("remoteType", ""),
-                               "country": (info.get("country") or {}).get("descriptor", "")}
-                    apply_detail_text(p, html_to_text(info.get("jobDescription", "")))
+                    apply_workday_detail(p, workday_detail(client, tenant, host, site, path))
                 except (requests.RequestException, ValueError) as e:
                     log.debug("detail %s: %s", path, e)
+    return list(out.values())
+
+
+def workday_listing(company: str, board: str, tenant: str, site: str, jp: dict) -> Posting:
+    """One row of a Workday search result as a Posting."""
+    bullets = jp.get("bulletFields") or []
+    return Posting(company=company, title=clean(jp.get("title", "")), location=clean(jp.get("locationsText")),
+                   posted=clean(jp.get("postedOn")), req_id=bullets[0] if bullets else "",
+                   url=f"{board}{jp.get('externalPath', '')}", source=f"workday:{tenant}/{site}")
+
+
+def apply_workday_detail(p: Posting, info: dict) -> None:
+    """Fill a Posting from a Workday job's detail record (jobPostingInfo)."""
+    p.req_id = info.get("jobReqId", p.req_id)
+    p.location = info.get("location", p.location)
+    p.locations = [x for x in [info.get("location"), *(info.get("additionalLocations") or [])] if x]
+    p.start_date = info.get("startDate", "") or ""
+    if p.start_date:
+        p.posted = p.start_date[:10]
+    p.deadline = sane_deadline(info.get("endDate") or "")   # "Posting end date" when the tenant sets one
+    p.extra = {"startDate": p.start_date,
+               "timeType": info.get("timeType", ""),
+               "remoteType": info.get("remoteType", ""),
+               "country": (info.get("country") or {}).get("descriptor", "")}
+    apply_detail_text(p, html_to_text(info.get("jobDescription", "")))
+
+
+# --------------------------------------------------------------------------------------
+# Workday through a headless browser: for tenants behind a bot check that refuses scripted HTTP
+# even with Chrome's handshake. Opens the board page in Chromium (Playwright) and calls the same
+# JSON API from inside it, exactly as the page itself does. Needs: pip install playwright &&
+# playwright install chromium
+# --------------------------------------------------------------------------------------
+_BROWSER_FETCH = """async ([url, body]) => {
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), 30000);   // never wait forever on one call
+  try {
+    const r = await fetch(url, { signal: ctl.signal, ...(body
+      ? { method: 'POST', body, headers: { 'Content-Type': 'application/json', Accept: 'application/json' } }
+      : { headers: { Accept: 'application/json' } }) });
+    return { status: r.status, text: await r.text() };
+  } catch (e) {
+    return { status: 0, text: String(e) };
+  } finally { clearTimeout(t); }
+}"""
+
+
+def scrape_workday_browser(client: PoliteClient, company: str, cfg: dict, details: bool) -> list[Posting]:
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        raise RuntimeError("the headless-browser route needs Playwright: pip install playwright && playwright install chromium")
+    out: dict[str, Posting] = {}
+
+    def call(page, url: str, payload: dict | None = None) -> dict:
+        time.sleep(random.uniform(client.min_delay, client.max_delay))   # same polite pace as plain HTTP
+        r = page.evaluate(_BROWSER_FETCH, [url, json.dumps(payload) if payload is not None else None])
+        if r["status"] == 0:
+            raise RuntimeError(f"{url} -> no answer within 30 s from inside the browser ({r['text'][:120]})")
+        if r["status"] in (401, 403) or "_cf_chl_opt" in r["text"][:5000]:
+            raise BlockedError(f"{url} -> HTTP {r['status']} even from a real browser")
+        if r["status"] != 200:
+            raise RuntimeError(f"{url} -> HTTP {r['status']}: {r['text'][:200]}")
+        return json.loads(r["text"])
+
+    log.info("   %s: starting headless Chromium", company)
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(headless=True, timeout=60_000)
+        try:
+            ctx = browser.new_context(user_agent=DEFAULT_UA, locale="en-US")
+            page = ctx.new_page()
+            page.set_default_timeout(45_000)
+            for tenant, host, site, *opt in cfg["boards"]:
+                opts = opt[0] if opt else {}
+                everything = bool(opts.get("all"))
+                board, api = workday_urls(tenant, host, site)
+                log.info("   %s: opening %s in the browser", company, board)
+                resp = page.goto(board, wait_until="domcontentloaded", timeout=45_000)
+                log.info("   %s: page loaded (HTTP %s, title %r)", company, resp.status if resp else "?", page.title()[:60])
+                api_path = urlparse(api).path   # same-origin call from the board page
+                found: list[Posting] = []
+                for term in ([""] if everything else cfg.get("terms", WORKDAY_TERMS)):
+                    total, offset = None, 0
+                    while True:
+                        data = call(page, f"{api_path}/jobs", {"appliedFacets": {}, "limit": WD_PAGE, "offset": offset, "searchText": term})
+                        total = data.get("total") or 0 if total is None else total
+                        rows = data.get("jobPostings") or []
+                        for jp in rows:
+                            path = jp.get("externalPath", "")
+                            if path and f"{board}{path}" not in out and (everything or is_internship(jp.get("title", ""))):
+                                p = workday_listing(company, board, tenant, site, jp)
+                                out[p.url] = p
+                                found.append(p)
+                        offset += WD_PAGE
+                        if not rows or offset >= total or offset >= WD_PAGE * 50:
+                            break
+                    log.info("   %s: %s %r: %d jobs searched, %d internships so far", company, site, term or "(everything)", total, len(found))
+                if details:
+                    for k, p in enumerate(found, 1):
+                        if k == 1 or k % 10 == 0 or k == len(found):
+                            log.info("   %s: %s details %d/%d (browser)", company, site, k, len(found))
+                        try:
+                            apply_workday_detail(p, call(page, api_path + p.url[len(board):]).get("jobPostingInfo", {}))
+                        except (RuntimeError, ValueError) as e:
+                            log.debug("detail %s: %s", p.url, e)
+        finally:
+            browser.close()
     return list(out.values())
 
 
@@ -1153,6 +1369,7 @@ def scrape_radancy(client: PoliteClient, company: str, cfg: dict, details: bool,
 SCRAPERS = {
     "abbvie_search": scrape_abbvie_search,
     "phenom": scrape_phenom,
+    "workday_browser": scrape_workday_browser,
     "radancy": scrape_radancy,
     "ashby": scrape_ashby,
     "workday": scrape_workday,
@@ -1207,9 +1424,12 @@ def run(companies: list[str], details: bool, us_only: bool, client: PoliteClient
             cap = caps.setdefault(cluster(cfg), threading.Semaphore(CLUSTER_CAP))
         with cap:
             c = client if workers <= 1 else client.clone()
+            if cfg.get("impersonate"):
+                c = c.impersonating()
             log.info("== %s (%s)", name, cfg["platform"])
-            attempts = [(cfg, "")] + ([({**cfg["fallback"], "id": cfg.get("id")}, " via " + cfg["fallback"]["platform"])]
-                                      if cfg.get("fallback") else [])
+            fallbacks = cfg.get("fallback") or []
+            fallbacks = [fallbacks] if isinstance(fallbacks, dict) else fallbacks   # one source, or several in order
+            attempts = [(cfg, "")] + [({**fb, "id": cfg.get("id")}, " via " + fb.get("label", fb["platform"])) for fb in fallbacks]
             if ignore_robots and cfg.get("robots_disallowed"):
                 rd = cfg["robots_disallowed"]
                 attempts.insert(0, ({**rd, "id": cfg.get("id")}, " via " + rd["platform"] + " (robots.txt ignored)"))
@@ -1219,6 +1439,9 @@ def run(companies: list[str], details: bool, us_only: bool, client: PoliteClient
                     found = SCRAPERS[acfg["platform"]](c, name, acfg, details)
                     if us_only:
                         found = [p for p in found if is_us(p)]
+                    if cfg.get("require"):   # a company outside pharma: only postings on topic
+                        req = re.compile(cfg["require"], re.I)
+                        found = [p for p in found if req.search(f"{p.title}\n{p.description}")]
                     status[name] = f"ok ({len(found)}){via}"
                     log.info("   %s: %d internship postings%s", name, len(found), via)
                     return found

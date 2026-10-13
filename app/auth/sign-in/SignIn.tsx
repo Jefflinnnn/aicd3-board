@@ -67,11 +67,19 @@ export function SignIn({ domains }: { domains: string[] }) {
   const otp = () => code.replace(/\D/g, "")
   const done = () => { router.replace("/"); router.refresh() }
   const explain = (e: ErrLike, fallback: string) => {
+    // Neon Auth refuses sites missing from its trusted domains (Neon console > Auth > Configuration > Domains)
+    if (has(e, /INVALID_ORIGIN|invalid origin/i)) return "Sign-in isn't enabled for this web address yet. An admin needs to add it to the trusted domains in Neon Auth."
+    // a code is void after 3 wrong tries: waiting doesn't help, a new code does
+    if (has(e, /TOO_MANY_ATTEMPTS|too many attempts/i)) return "That code was entered wrong too many times, so it no longer works. Choose “Send a new code” and use the newest email."
     if (e?.status === 429 || has(e, /TOO_MANY|rate_limit/i)) return "Too many tries. Wait a minute and try again."
     if (has(e, /DOMAIN_NOT_ALLOWED|addresses can sign in/i)) return `Use your ${label} email address.`
+    if (has(e, /PASSWORD_TOO_LONG/i)) return "That password is too long. Use 128 characters or fewer."
     if (has(e, /PASSWORD_TOO|weak_password/i)) return `Use at least ${MIN_PW} characters.`
-    if (has(e, /OTP|invalid code|expired/i)) return "That code didn't work. Check it, or send a new one."
-    return fallback
+    if (has(e, /COMPROMISED|breach|pwned/i)) return "That password appears in known data breaches. Choose a different one."
+    if (has(e, /OTP_EXPIRED|expired/i)) return "That code has expired (codes last a few minutes). Choose “Send a new code”."
+    if (has(e, /OTP|invalid code/i)) return "That code didn't work. Only the newest code works; check it, or send a new one."
+    // say what the server said rather than hide it behind a generic line
+    return e?.message && !/^(fetch failed|failed to fetch)$/i.test(e.message) ? `${fallback} (${e.message})` : fallback
   }
   /** wrap a step: one at a time, errors shown under the form */
   const run = (fn: () => Promise<void>) => async (e?: React.FormEvent) => {

@@ -5,7 +5,7 @@ import { GeistMono } from "geist/font/mono";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "AICD3 Launchpad",
+  title: "AICD3 Job Board",
   description: "Internship postings from pharma, biotech and startup companies, tracked for AICD3 students.",
   // student data sits behind sign-in; keep every page out of search engines
   robots: { index: false, follow: false },

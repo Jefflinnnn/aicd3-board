@@ -18,13 +18,13 @@ import type { ScrapeRun } from "@/lib/generated/prisma/client"
  * Once .venv-d3 exists, refreshes use its Python, so they classify with d3-flash, without a restart.
  */
 
-const ROOT = process.cwd()
-const SCRIPT = path.join(ROOT, "scraper", "pipeline.py")
+const ROOT = /*turbopackIgnore: true*/ process.cwd()
+const SCRIPT = path.join(/*turbopackIgnore: true*/ ROOT, "scraper", "pipeline.py")
 const WIN = process.platform === "win32"
-const SETUP = path.join(ROOT, "scraper", WIN ? "setup_d3.ps1" : "setup_d3.sh")
-const VENV_PY = WIN ? path.join(ROOT, ".venv-d3", "Scripts", "python.exe") : path.join(ROOT, ".venv-d3", "bin", "python")
-const VENV_REV = path.join(ROOT, ".venv-d3", "D3_REVISION")
-const D3_OK = path.join(ROOT, ".venv-d3", "D3_OK")
+const SETUP = path.join(/*turbopackIgnore: true*/ ROOT, "scraper", WIN ? "setup_d3.ps1" : "setup_d3.sh")
+const VENV_PY = WIN ? path.join(/*turbopackIgnore: true*/ ROOT, ".venv-d3", "Scripts", "python.exe") : path.join(/*turbopackIgnore: true*/ ROOT, ".venv-d3", "bin", "python")
+const VENV_REV = path.join(/*turbopackIgnore: true*/ ROOT, ".venv-d3", "D3_REVISION")
+const D3_OK = path.join(/*turbopackIgnore: true*/ ROOT, ".venv-d3", "D3_OK")
 /** SCRAPER_PYTHON if set, else the d3 environment once setup has finished, else python3 */
 const python = () => process.env.SCRAPER_PYTHON || (fs.existsSync(D3_OK) && fs.existsSync(VENV_PY) ? VENV_PY : WIN ? "python" : "python3")
 const d3Revision = () => {
@@ -32,7 +32,8 @@ const d3Revision = () => {
 }
 /** a run still "running" after this long is treated as dead */
 const STALE_MS = 6 * 3600_000
-const LOG_LINES = 60
+/** lines of each run's output kept in the database (the full log is in scraper/out/logs/) */
+const LOG_LINES = 400
 const CHECK_EVERY_MS = 15 * 60_000
 
 type Live = { child: ChildProcess; lines: string[]; flushed: number; stopping?: boolean }
@@ -101,9 +102,10 @@ export async function sweepDeadRuns() {
     const old = Date.now() - r.startedAt.getTime() > STALE_MS
     if (old || !alive(r.pid)) {
       if (old) killGroup(r.pid)
+      console.warn(`[refresh] run ${r.id} marked failed: ${old ? "took longer than 6 hours" : "its process is gone (the app restarted?)"}`)
       await db().scrapeRun.update({
         where: { id: r.id },
-        data: { status: "failed", finishedAt: new Date(), log: (r.log + "\n[stopped: the server restarted or the run took too long]").slice(-20000) },
+        data: { status: "failed", finishedAt: new Date(), log: (r.log + `\n[server] ${old ? "stopped: the run took longer than 6 hours" : "stopped: the app restarted or was closed while this run was going, which ends the run"} (noticed ${new Date().toLocaleString()})`).slice(-60000) },
       })
     }
   }
@@ -156,11 +158,13 @@ export async function startRefresh(trigger: "manual" | "schedule" | "setup", req
     detached: !WIN, // its own process group, so Stop ends the scraper and anything it started (Windows: taskkill /T)
     windowsHide: true,
   })
-  const entry: Live = { child, lines: [], flushed: 0 }
+  const t0 = Date.now()
+  const entry: Live = { child, lines: [`[server] ${new Date(t0).toLocaleString()}: ${trigger} run started: ${cmd} ${args.map((a) => (a.startsWith(ROOT + path.sep) ? path.relative(ROOT, a) : a)).join(" ")}`], flushed: 0 }
+  console.log(`[refresh] run ${run.id} started (${trigger}): ${cmd}`)
   live.set(run.id, entry)
   const take = (buf: Buffer) => {
-    for (const l of buf.toString("utf8").split(/\r?\n/)) if (l.trim()) entry.lines.push(l.slice(0, 400))
-    if (entry.lines.length > LOG_LINES * 4) entry.lines.splice(0, entry.lines.length - LOG_LINES)
+    for (const l of buf.toString("utf8").split(/\r?\n/)) if (l.trim()) entry.lines.push(l.slice(0, 1000))
+    if (entry.lines.length > LOG_LINES * 2) entry.lines.splice(1, entry.lines.length - LOG_LINES)   // keep the "[server] started" line
     if (Date.now() - entry.flushed > 10_000) {
       entry.flushed = Date.now()
       db().scrapeRun.update({ where: { id: run.id }, data: { log: entry.lines.slice(-LOG_LINES).join("\n") } }).catch(() => {})
@@ -168,7 +172,10 @@ export async function startRefresh(trigger: "manual" | "schedule" | "setup", req
   }
   child.stdout?.on("data", take)
   child.stderr?.on("data", take)
-  child.on("error", (e) => entry.lines.push(`[could not start: ${e.message}]`))
+  child.on("error", (e) => {
+    entry.lines.push(`[server] could not start ${cmd}: ${e.message}`)
+    console.error(`[refresh] run ${run.id} could not start ${cmd}: ${e.message}`)
+  })
   child.on("close", async (code, signal) => {
     live.delete(run.id)
     let summary: unknown = null
@@ -179,6 +186,10 @@ export async function startRefresh(trigger: "manual" | "schedule" | "setup", req
     if (trigger === "setup") g.__pyCheck = undefined // the next refresh re-checks which Python to use
     const cancelled = entry.stopping || signal === "SIGTERM" || signal === "SIGKILL"
     const status = cancelled ? "cancelled" : code === 0 ? "succeeded" : code === 2 && summary ? "partial" : "failed"
+    const secs = Math.round((Date.now() - t0) / 1000)
+    const how = signal ? `was stopped by ${signal}` : `exited with code ${code}`
+    entry.lines.push(`[server] ${new Date().toLocaleString()}: the ${trigger === "setup" ? "setup" : "pipeline"} ${how} after ${Math.floor(secs / 60)}m ${secs % 60}s: ${status}`)
+    ;(status === "failed" ? console.error : console.log)(`[refresh] run ${run.id} ${status} (${how}, ${Math.floor(secs / 60)}m ${secs % 60}s)${status === "failed" ? `. Last lines:\n  ${entry.lines.slice(-8).join("\n  ")}` : ""}`)
     await db().scrapeRun.update({
       where: { id: run.id },
       data: { status, finishedAt: new Date(), pid: null, summary: summary ? JSON.parse(JSON.stringify(summary)) : undefined, log: entry.lines.slice(-LOG_LINES).join("\n") },

@@ -1,0 +1,74 @@
+# Job data refresh in the cloud: runs scraper/pipeline.py every other day on GitHub's machines and
+# sends the results to the live site, so nobody's computer has to be on. Same pipeline as the Admin
+# page's Refresh button, with the keyword-rule classifier (GitHub's machines have no GPU for d3-flash).
+#
+# Setup (GitHub → this repository → Settings → Secrets and variables → Actions → New repository secret):
+#   AICD3_URL           the live site, e.g. https://your-app.vercel.app (no trailing slash)
+#   AICD3_INGEST_TOKEN  the same value as SCRAPER_INGEST_TOKEN in Vercel's environment variables
+# Run it by hand any time from the Actions tab → "Job data refresh" → Run workflow.
+name: Job data refresh
+
+on:
+  schedule:
+    - cron: "17 14 */2 * *" # every other day at 14:17 UTC (7:17 am Pacific in summer)
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run: show what would change, save nothing"
+        type: boolean
+        default: false
+      companies:
+        description: "Only these companies (space-separated, e.g. Gilead Genentech); empty = all"
+        required: false
+        default: ""
+
+concurrency:
+  group: job-data-refresh
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      AICD3_URL: ${{ secrets.AICD3_URL }}
+      AICD3_INGEST_TOKEN: ${{ secrets.AICD3_INGEST_TOKEN }}
+    steps:
+      - name: Check the secrets are set
+        run: |
+          if [ -z "$AICD3_URL" ] || [ -z "$AICD3_INGEST_TOKEN" ]; then
+            echo "::error::Add the AICD3_URL and AICD3_INGEST_TOKEN repository secrets (see the top of .github/workflows/refresh.yml)."
+            exit 1
+          fi
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: scraper/requirements.txt
+      - run: pip install -r scraper/requirements.txt
+      - name: Headless Chromium (Eli Lilly's fallback route past its bot check)
+        run: pip install playwright && python -m playwright install --with-deps chromium
+      - name: Scrape, classify, import, re-check
+        run: |
+          args=(--url "$AICD3_URL" --classifier rules --summary-json scraper/out/summary.json)
+          if [ "${{ inputs.dry_run }}" = "true" ]; then args+=(--dry-run); fi
+          if [ -n "${{ inputs.companies }}" ]; then args+=(--companies ${{ inputs.companies }}); fi
+          set +e
+          python scraper/pipeline.py "${args[@]}"
+          code=$?
+          set -e
+          # 2 = finished, but some companies couldn't be scraped: keep the run green, flag it
+          if [ "$code" = "2" ]; then echo "::warning::Some companies couldn't be scraped; see the log."; exit 0; fi
+          exit $code
+      - name: Keep the log and fit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: refresh-${{ github.run_id }}
+          path: |
+            scraper/out/logs/
+            scraper/out/pipeline/fit.csv
+            scraper/out/summary.json
+          retention-days: 14
+          if-no-files-found: ignore

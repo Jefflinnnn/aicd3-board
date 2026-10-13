@@ -4,6 +4,8 @@ import { runImport } from "@/lib/server/postings"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
+// a full scrape imports a few hundred postings in one transaction; give it room beyond the default
+export const maxDuration = 300
 
 const MAX_BYTES = 10 * 1024 * 1024
 

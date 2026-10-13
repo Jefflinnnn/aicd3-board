@@ -31,6 +31,8 @@ export function ReportDialog({ open, onOpenChange, jobId }: { open: boolean; onO
 
   useEffect(() => {
     if (open) {
+      // a fresh form each time the dialog opens, for the posting it was opened from
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setJob(jobId || NONE)
       setKind(jobId ? ISSUE_KINDS[0] : ISSUE_KINDS[4])
       setDetails("")
@@ -66,7 +68,7 @@ export function ReportDialog({ open, onOpenChange, jobId }: { open: boolean; onO
             <DialogDescription>Spotted a broken link, a closed posting or wrong details? Let us know.</DialogDescription>
           </DialogHeader>
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="ikind">What's wrong?</Label>
+            <Label htmlFor="ikind">What’s wrong?</Label>
             <Select value={kind} onValueChange={setKind}>
               <SelectTrigger id="ikind"><SelectValue /></SelectTrigger>
               <SelectContent>{ISSUE_KINDS.map((k) => <SelectItem key={k} value={k}>{k}</SelectItem>)}</SelectContent>
