@@ -166,7 +166,7 @@ DEMO_MODE=1
 NEXT_PUBLIC_REAL_SITE_URL=https://your-real-site.vercel.app   # optional: the banner links here
 ```
 
-Give it **no** database, Neon Auth or scraper variables. Even if some were set by mistake, demo mode never reads or writes the database (`tests/access.test.mts` checks this). Try it locally with `DEMO_MODE=1 pnpm dev`.
+Give it **no** database, Neon Auth or scraper variables. Even if some were set by mistake, demo mode never reads or writes the database (`tests/access.test.mts` checks this). Try it locally with `pnpm dev:demo` (http://localhost:3001, alongside `pnpm dev` on :3000; plain `pnpm dev` is always the real site).
 
 ## Local development database
 

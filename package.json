@@ -7,6 +7,7 @@
   },
   "scripts": {
     "dev": "prisma generate && next dev",
+    "dev:demo": "prisma generate && DEMO_MODE=1 next dev -p 3001",
     "build": "prisma generate && next build",
     "vercel-build": "node scripts/vercel-build.mjs",
     "start": "next start",
