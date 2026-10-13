@@ -63,6 +63,76 @@ class Checks(unittest.TestCase):
         self.assertEqual(sorted((r.id, r.status) for r in got), [("a", "closed"), ("b", "closed")])
 
 
+class ManualReview(unittest.TestCase):
+    def test_maintenance_page_is_unknown_not_a_crash(self):
+        url = "https://amgen.wd1.myworkdayjobs.com/Careers/job/X/Intern_R-1"
+        down = make_resp("https://static.community.workday.com/maintenance-page.html", 403,
+                         "<html>Workday is currently unavailable.</html>", "text/html")
+        r = co.check(FakeClient(lambda m, u, k: down), posting(url))
+        self.assertEqual(r.status, "unknown")
+
+    def run_main(self, postings, handler, *flags):
+        calls = []
+
+        def fake_app(method, path, url, token, body=None):
+            calls.append((path, body))
+            if path == "/api/ingest/open":
+                return {"postings": postings}
+            return {"closed": len(body["ids"])} if path.endswith("close") else {"flagged": len(body["ids"])}
+        import os, tempfile
+        orig_app, orig_client = co.app_call, co.pi.PoliteClient
+        co.app_call = fake_app
+        co.pi.PoliteClient = lambda *a, **k: FakeClient(handler)
+        os.environ["AICD3_INGEST_TOKEN"] = "t"
+        try:
+            with tempfile.TemporaryDirectory() as d:
+                co.main(["--workers", "1", "--report", d + "/r.json", *flags])
+        finally:
+            co.app_call, co.pi.PoliteClient = orig_app, orig_client
+        return {path: body for path, body in calls if path != "/api/ingest/open"}
+
+    def test_apply_closes_the_closed_and_flags_the_unconfirmed(self):
+        ps = [posting("https://jobs.boehringer-ingelheim.com/job/A/1438182733/", "boehringer", "gone"),
+              posting("https://jobs.boehringer-ingelheim.com/job/B/1438182734/", "boehringer", "err"),
+              posting("https://jobs.boehringer-ingelheim.com/job/C/1438182735/", "boehringer", "live")]
+
+        def handler(m, u, k):
+            if "1438182733" in u:
+                return make_resp(u, 404, "", "text/html")
+            if "1438182734" in u:
+                return make_resp(u, 500, "", "text/html")
+            return make_resp(u, 200, "<html>Apply now</html>", "text/html")
+        sent = self.run_main(ps, handler, "--apply")
+        self.assertEqual(sent["/api/ingest/close"]["ids"], ["gone"])
+        self.assertEqual(sent["/api/ingest/flag"]["ids"], ["err"])
+        self.assertIn("500", sent["/api/ingest/flag"]["reasons"]["err"])
+        self.assertEqual(self.run_main(ps, handler), {})  # report only without --apply
+
+    def test_a_whole_site_down_is_reported_not_flagged(self):
+        ps = [posting(f"https://amgen.wd1.myworkdayjobs.com/Careers/job/X/I_R-{i}", pid=f"a{i}") for i in range(3)]
+        ps.append(posting("https://jobs.boehringer-ingelheim.com/job/B/1438182734/", "boehringer", "b"))
+
+        def handler(m, u, k):
+            return make_resp(u, 503, "{}") if "workday" in u else make_resp(u, 500, "", "text/html")
+        sent = self.run_main(ps, handler, "--apply")
+        self.assertEqual(sent["/api/ingest/flag"]["ids"], ["b"])  # single posting on its site: still flagged
+        sent = self.run_main(ps, handler, "--apply", "--flag-site-outages")
+        self.assertEqual(sorted(sent["/api/ingest/flag"]["ids"]), ["a0", "a1", "a2", "b"])
+
+
+class Ashby(unittest.TestCase):
+    def test_board_membership_decides(self):
+        co._ashby_boards.clear()
+        board = json.dumps({"jobs": [{"id": "0bff19c6-e165-4be7-a32a-6beeffb51ffa"}]})
+        client = FakeClient(lambda m, u, k: make_resp(u, 200, board))
+        live = posting("https://jobs.ashbyhq.com/insitro/0bff19c6-e165-4be7-a32a-6beeffb51ffa", "insitro")
+        gone = posting("https://jobs.ashbyhq.com/insitro/11111111-2222-3333-4444-555555555555", "insitro", "j2")
+        self.assertEqual((co.check(client, live).status, co.check(client, gone).status), ("open", "closed"))
+        co._ashby_boards.clear()
+        self.assertEqual(co.check(FakeClient(lambda m, u, k: make_resp(u, 500, "{}")), live).status, "unknown")
+        co._ashby_boards.clear()
+
+
 class Locations(unittest.TestCase):
     def test_normalize(self):
         import pharma_internships as pi

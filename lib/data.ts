@@ -42,8 +42,9 @@ export interface Job {
 /** Why a posting is held back from students, and where it stands with staff. */
 export interface ReviewInfo {
   flags: string[]
-  /** where it came from: an import the checks flagged, or a staff member holding or pulling it back */
-  source: "import" | "held" | "pulled"
+  /** where it came from: an import the checks flagged, a staff member holding or pulling it back,
+   *  or the open/closed checker (scraper/check_open.py) not being able to confirm it's still open */
+  source: "import" | "held" | "pulled" | "check"
   at: number
   status: "pending" | "rejected"
   decidedAt?: number
@@ -119,14 +120,9 @@ export const COMPANIES: Company[] = [
   { id: "vertex", name: "Vertex", type: "Mid-size biotech", hq: "Boston, MA", site: "https://www.vrtx.com", focus: [0.45, 0.4, 0.15], w: 3 },
   { id: "regeneron", name: "Regeneron", type: "Mid-size biotech", hq: "Tarrytown, NY", site: "https://www.regeneron.com", focus: [0.5, 0.35, 0.15], w: 3 },
   { id: "biogen", name: "Biogen", type: "Mid-size biotech", hq: "Cambridge, MA", site: "https://www.biogen.com", focus: [0.4, 0.45, 0.15], w: 2 },
-  { id: "alnylam", name: "Alnylam", type: "Mid-size biotech", hq: "Cambridge, MA", site: "https://www.alnylam.com", focus: [0.45, 0.4, 0.15], w: 2 },
-  { id: "biomarin", name: "BioMarin", type: "Mid-size biotech", hq: "San Rafael, CA", site: "https://www.biomarin.com", focus: [0.3, 0.6, 0.1], w: 2 },
-  { id: "exelixis", name: "Exelixis", type: "Mid-size biotech", hq: "Alameda, CA", site: "https://www.exelixis.com", focus: [0.4, 0.5, 0.1], w: 1 },
-  { id: "arcus", name: "Arcus Biosciences", type: "Mid-size biotech", hq: "Hayward, CA", site: "https://www.arcusbio.com", focus: [0.5, 0.4, 0.1], w: 1 },
   { id: "insitro", name: "insitro", type: "Startup", hq: "South San Francisco, CA", site: "https://www.insitro.com", focus: [0.3, 0, 0.7], w: 2 },
   { id: "recursion", name: "Recursion", type: "Startup", hq: "Salt Lake City, UT", site: "https://www.recursion.com", focus: [0.35, 0.1, 0.55], w: 2 },
   { id: "generate", name: "Generate:Biomedicines", type: "Startup", hq: "Somerville, MA", site: "https://www.generatebiomedicines.com", focus: [0.5, 0.05, 0.45], w: 2 },
-  { id: "dyno", name: "Dyno Therapeutics", type: "Startup", hq: "Watertown, MA", site: "https://www.dynotx.com", focus: [0.55, 0.05, 0.4], w: 1 },
   // companies the scraper covers (scraper/pharma_internships.py); w: 0 keeps them out of the sample data
   { id: "abbvie", name: "AbbVie", type: "Large pharma", hq: "North Chicago, IL", site: "https://www.abbvie.com", focus: [0.3, 0.5, 0.2], w: 0 },
   { id: "astrazeneca", name: "AstraZeneca", type: "Large pharma", hq: "Cambridge, UK", site: "https://www.astrazeneca.com", focus: [0.35, 0.45, 0.2], w: 0 },
@@ -255,8 +251,6 @@ const SITES: Record<string, string[]> = {
   vertex: ["Boston, MA", "San Diego, CA"],
   regeneron: ["Tarrytown, NY", "Rensselaer, NY"],
   biogen: ["Cambridge, MA", "Research Triangle Park, NC"],
-  alnylam: ["Cambridge, MA", "Norton, MA"],
-  biomarin: ["San Rafael, CA", "Novato, CA"],
 }
 const COORDS: Record<string, [number, number]> = {
   "South San Francisco, CA": [37.65, -122.41], "Oceanside, CA": [33.2, -117.38], "Vacaville, CA": [38.36, -121.99],
@@ -284,11 +278,19 @@ Object.assign(COORDS, {
   "Wilmington, DE": [39.74, -75.55], "North Chicago, IL": [42.33, -87.84], "Lake Forest, IL": [42.26, -87.84], "Ridgefield, CT": [41.28, -73.5],
   "Pearl River, NY": [41.06, -74.02], "Kalamazoo, MI": [42.29, -85.59], "Redwood City, CA": [37.49, -122.24], "Brisbane, CA": [37.68, -122.4],
   "Durham, NC": [35.99, -78.9], "Morrisville, NC": [35.82, -78.83], "Holly Springs, NC": [35.65, -78.83], "Sanford, NC": [35.48, -79.18],
-  "New Albany, OH": [40.08, -82.81], "Columbus, OH": [39.96, -83.0],
+  "New Albany, OH": [40.08, -82.81], "Columbus, OH": [39.96, -83.0], "Hillsboro, OR": [45.52, -122.99],
 })
 Object.assign(COORDS, {
   "San Francisco, CA": [37.77, -122.42], "Los Angeles, CA": [34.05, -118.24], "Seattle, WA": [47.61, -122.33],
   "Chicago, IL": [41.88, -87.63], "Philadelphia, PA": [39.95, -75.17], "Austin, TX": [30.27, -97.74],
+})
+// internship sites seen on the career sites in Oct 2026
+Object.assign(COORDS, {
+  "Frederick, MD": [39.41, -77.41], "Sleepy Hollow, NY": [41.09, -73.86], "Armonk, NY": [41.13, -73.71],
+  "Warren, NJ": [40.63, -74.5], "Johns Creek, GA": [34.03, -84.2], "Athens, GA": [33.96, -83.38],
+  "Saint Joseph, MO": [39.77, -94.85], "Zebulon, NC": [35.82, -78.31], "West Greenwich, RI": [41.63, -71.66],
+  "Mettawa, IL": [42.24, -87.92], "Upper Merion, PA": [40.08, -75.38], "Upper Providence, PA": [40.16, -75.48],
+  "New York City, NY": [40.71, -74.01], "Irvine, CA": [33.68, -117.83],
 })
 /** [latitude, longitude] for a known site, or undefined. */
 export const cityCoord = (loc: string): [number, number] | undefined => COORDS[loc]

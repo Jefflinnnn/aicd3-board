@@ -5,19 +5,29 @@ Re-check every posting that is open on the job board and find the ones the emplo
   export AICD3_URL=https://your-job-board.example     # or http://localhost:3000
   export AICD3_INGEST_TOKEN=...                        # the app's SCRAPER_INGEST_TOKEN
   python3 scraper/check_open.py                        # report only
-  python3 scraper/check_open.py --apply                # also mark the closed ones "Taken down"
+  python3 scraper/check_open.py --apply                # also mark the closed ones "Taken down" and send
+                                                       # the ones it can't confirm to the review queue
 
 It asks the app for its open postings (GET /api/ingest/open), checks each one's own link at the same
 polite pace as the scraper (one request at a time per site, several sites side by side), and with
---apply sends the closed ones to POST /api/ingest/close. One request per posting, so it is much
-lighter than a full scrape and can run daily.
+--apply sends the closed ones to POST /api/ingest/close and the ones it couldn't confirm to
+POST /api/ingest/flag. One request per posting, so it is much lighter than a full scrape and can
+run daily.
 
 How a posting counts as closed:
   * Workday     the job's detail record is gone (404/410) or no longer accepts applications
   * Greenhouse  the job is gone from the company's public job board API (404)
+  * Ashby       the job is no longer in the company's public job board API
   * other sites the page answers 404/410, redirects away from the job, or says it's no longer open
 Anything else (a block page, a timeout, a server error, a link to the company's home page) counts
-as "unknown" and is left alone, so a bad day on a career site never closes postings by mistake.
+as "unknown": it is never closed automatically. With --apply it goes to the staff review queue
+("Couldn't confirm it's still open"), off the job board until staff Approve it (back on the board)
+or Reject it (kept off).
+
+One exception: when every posting on a site comes back unknown (the whole site is down, in
+maintenance or blocking us), the postings stay on the board and are only reported, so one bad
+morning on a career site doesn't empty that company from the board. Use --flag-site-outages to
+send them to review anyway.
 """
 from __future__ import annotations
 
@@ -57,6 +67,22 @@ class Result:
     url: str
     status: str  # open | closed | unknown
     reason: str
+    site_down: bool = False  # unknown because the whole site failed, not this posting
+
+
+SITE_DOWN_MIN = 3  # a site needs at least this many postings, all unknown, to count as down
+
+
+def mark_site_outages(results: list["Result"], postings: list[dict]) -> None:
+    """Mark the unknown results of sites where every posting came back unknown."""
+    host_of = {p["id"]: site_key(p) for p in postings}
+    by_host: dict[str, list[Result]] = defaultdict(list)
+    for r in results:
+        by_host[host_of.get(r.id, "")].append(r)
+    for host, rs in by_host.items():
+        if host and len(rs) >= SITE_DOWN_MIN and all(r.status == "unknown" for r in rs):
+            for r in rs:
+                r.site_down = True
 
 
 def workday_detail_url(url: str) -> str | None:
@@ -87,6 +113,19 @@ def greenhouse_api_url(url: str, company: str) -> str | None:
     return None
 
 
+ASHBY_URL = re.compile(r"^https://jobs\.ashbyhq\.com/(?P<org>[^/]+)/(?P<id>[0-9a-f-]{36})", re.I)
+_ashby_boards: dict[str, set[str]] = {}
+
+
+def ashby_open_ids(client: pi.PoliteClient, org: str) -> set[str]:
+    """Ids of every job on an Ashby board, fetched once per run."""
+    if org not in _ashby_boards:
+        r = client.get(f"https://api.ashbyhq.com/posting-api/job-board/{org}", headers={"Accept": "application/json"})
+        r.raise_for_status()
+        _ashby_boards[org] = {j.get("id") for j in r.json().get("jobs", [])}
+    return _ashby_boards[org]
+
+
 def check(client: pi.PoliteClient, p: dict) -> Result:
     def res(status: str, reason: str) -> Result:
         return Result(p["id"], p["company"], p["title"], p["url"], status, reason)
@@ -112,6 +151,13 @@ def check(client: pi.PoliteClient, p: dict) -> Result:
                 return res("closed", "Workday says it no longer accepts applications")
             return res("open", "Workday posting is live")
 
+        m = ASHBY_URL.match(url)
+        if m:   # the job page itself is an app shell that answers 200 even for removed jobs
+            ids = ashby_open_ids(client, m.group("org"))
+            if not ids:
+                return res("unknown", "the Ashby job board came back empty")
+            return res("open", "on the Ashby job board") if m.group("id") in ids else res("closed", "gone from the Ashby job board")
+
         api = greenhouse_api_url(url, p.get("company", ""))
         if api:
             r = client.get(api, headers={"Accept": "application/json"})
@@ -131,19 +177,26 @@ def check(client: pi.PoliteClient, p: dict) -> Result:
         if CLOSED_TEXT.search(r.text[:200000]):
             return res("closed", "page says the job is no longer open")
         return res("open", "posting page is live")
+    except pi.UnavailableError:
+        return res("unknown", "the site is down for maintenance")
     except pi.BlockedError:
         return res("unknown", "the site showed a bot check")
-    except (requests.RequestException, ValueError) as e:
+    except (requests.RequestException, ValueError, KeyError) as e:
         return res("unknown", f"request failed: {e.__class__.__name__}")
+
+
+def site_key(p: dict) -> str:
+    url = p.get("url") or ""
+    if ASHBY_URL.match(url):
+        return "api.ashbyhq.com"
+    return urlparse(workday_detail_url(url) or greenhouse_api_url(url, p.get("company", "")) or url).netloc
 
 
 def check_all(postings: list[dict], client: pi.PoliteClient, workers: int) -> list[Result]:
     """One thread per site (host), so each site still sees one request at a time at the polite pace."""
     by_host: dict[str, list[dict]] = defaultdict(list)
     for p in postings:
-        url = p.get("url") or ""
-        api = workday_detail_url(url) or greenhouse_api_url(url, p.get("company", "")) or url
-        by_host[urlparse(api).netloc].append(p)
+        by_host[site_key(p)].append(p)
 
     def run_host(items: list[dict]) -> list[Result]:
         c = client if workers <= 1 else client.clone()
@@ -170,7 +223,10 @@ def app_call(method: str, path: str, url: str, token: str, body: dict | None = N
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--apply", action="store_true", help="mark the closed postings 'Taken down' on the board")
+    ap.add_argument("--apply", action="store_true",
+                    help="mark the closed postings 'Taken down' and send the unconfirmed ones to the review queue")
+    ap.add_argument("--flag-site-outages", action="store_true",
+                    help="with --apply, also send postings to review when their whole site was down")
     ap.add_argument("--url", default=os.environ.get("AICD3_URL", "http://localhost:3000"))
     ap.add_argument("--workers", type=int, default=5, help="sites checked side by side (each one politely); max 6")
     ap.add_argument("--min-delay", type=float, default=1.5)
@@ -189,26 +245,39 @@ def main(argv: list[str] | None = None) -> int:
     client = pi.PoliteClient(args.min_delay, args.max_delay)
     results = check_all(postings, client, max(1, min(args.workers, 6)))
 
+    mark_site_outages(results, postings)
     closed = [r for r in results if r.status == "closed"]
     unknown = [r for r in results if r.status == "unknown"]
+    to_flag = [r for r in unknown if args.flag_site_outages or not r.site_down]
+    down = sorted({r.company for r in unknown if r.site_down})
     os.makedirs(os.path.dirname(args.report) or ".", exist_ok=True)
     with open(args.report, "w", encoding="utf-8") as f:
         json.dump([r.__dict__ for r in results], f, ensure_ascii=False, indent=2)
-    print(f"\n{len(results) - len(closed) - len(unknown)} still open, {len(closed)} closed, {len(unknown)} couldn't be checked")
+    print(f"\n{len(results) - len(closed) - len(unknown)} still open, {len(closed)} closed, "
+          f"{len(unknown)} couldn't be confirmed ({len(to_flag)} for manual review)")
     for r in closed:
         print(f"  CLOSED  {r.company:<12} {r.title[:60]:<60}  {r.reason}")
-    for r in unknown[:30]:
-        print(f"  ?       {r.company:<12} {r.title[:60]:<60}  {r.reason}")
+    for r in to_flag[:50]:
+        print(f"  REVIEW  {r.company:<12} {r.title[:60]:<60}  {r.reason}")
+    if len(to_flag) > 50:
+        print(f"  … and {len(to_flag) - 50} more for review (see the report)")
+    if down and not args.flag_site_outages:
+        print(f"  Site down, left on the board: {', '.join(down)} (every posting failed; try again later)")
     print(f"Full results: {args.report}")
 
-    if closed and args.apply:
+    if not args.apply:
+        if closed or to_flag:
+            print("Run again with --apply to mark the closed ones taken down and send the rest to the review queue.")
+        return 0
+    if closed:
         out = app_call("POST", "/api/ingest/close", args.url, token,
                        {"ids": [r.id for r in closed], "reasons": {r.id: r.reason for r in closed}})
         print(f"Marked {out['closed']} as taken down.")
-    elif closed:
-        print("Run again with --apply to mark them taken down.")
+    if to_flag:
+        out = app_call("POST", "/api/ingest/flag", args.url, token,
+                       {"ids": [r.id for r in to_flag], "reasons": {r.id: r.reason[:250] for r in to_flag}})
+        print(f"Sent {out['flagged']} to the review queue for a manual check.")
     return 0
-
 
 if __name__ == "__main__":
     sys.exit(main())

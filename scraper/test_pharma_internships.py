@@ -370,5 +370,344 @@ class Parallel(unittest.TestCase):
         self.assertTrue(all(v == "ok (1)" for v in status.values()))
 
 
+def phenom_page(ddo):
+    return ('<html><head><script>var phApp = phApp || {};\nphApp.ddo = ' + json.dumps(ddo) +
+            '; phApp.experimentData = {};</script></head><body></body></html>')
+
+
+GENE_SEARCH = phenom_page({"siteConfig": {"note": "braces { in } strings and \\\"quotes\\\""},
+                           "eagerLoadRefineSearch": {"totalHits": 3, "data": {"jobs": [
+    {"jobId": "202610-125229", "reqId": "202610-125229", "title": "2027 Spring Intern - GenAI Applications",
+     "jobUrl": "https://careers.gene.com/us/en/job/202610-125229/2027-Spring-Intern-GenAI-Applications",
+     "postedDate": "2026-10-05T00:00:00.000+0000", "multi_location": ["South San Francisco, California, United States of America"]},
+    {"jobId": "202609-123586", "title": "Measurement Analytics & Insights Senior Manager",
+     "jobUrl": "https://careers.gene.com/us/en/job/202609-123586/x", "postedDate": "2026-10-02T00:00:00.000+0000"},
+    {"jobId": "202609-124239", "title": "2027 Summer Intern - Quality Control",
+     "jobUrl": "https://careers.gene.com/us/en/job/202609-124239/2027-Summer-Intern-Quality-Control",
+     "postedDate": "2026-10-05T00:00:00.000+0000", "multi_location": [{"location": "Hillsboro, Oregon, United States of America"}]}]}}})
+GENE_JOB = phenom_page({"jobDetail": {"data": {"job": {
+    "description": "<p>The Position</p><ul><li>Build agents</li></ul><p>The expected salary range is $52.00 per hour.</p>",
+    "multi_location": [{"location": "South San Francisco, California, United States of America"}]}}}})
+WORKDAY_DOWN = "<html><title>Workday is currently unavailable.</title><body>We are experiencing a service interruption.</body></html>"
+
+
+class Phenom(unittest.TestCase):
+    def test_parse_ddo_handles_braces_and_quotes_in_strings(self):
+        ddo = pi.parse_phenom_ddo(GENE_SEARCH)
+        self.assertEqual(ddo["eagerLoadRefineSearch"]["totalHits"], 3)
+        self.assertIn("{ in }", ddo["siteConfig"]["note"])
+
+    def test_scrape_with_details(self):
+        def handler(method, url, kw):
+            return make_resp(url, 200, GENE_SEARCH if "search-results" in url else GENE_JOB, "text/html")
+        cfg = {"base": "https://careers.gene.com", "path": "/us/en", "terms": ["intern"]}
+        got = pi.scrape_phenom(FakeClient(handler), "Genentech", cfg, True)
+        self.assertEqual(sorted(p.req_id for p in got), ["202609-124239", "202610-125229"])  # manager role filtered out
+        genai = next(p for p in got if p.req_id == "202610-125229")
+        self.assertEqual((genai.posted, genai.pay), ("2026-10-05", "$52.00 per hour"))
+        self.assertIn("• Build agents", genai.description)
+        self.assertEqual(pi.to_import_record(genai)["locations"], ["South San Francisco, CA"])
+
+
+class Maintenance(unittest.TestCase):
+    def test_workday_down_falls_back_to_careers_site(self):
+        def handler(method, url, kw):
+            if "myworkdayjobs.com" in url:
+                return make_resp("https://static.community.workday.com/maintenance-page.html", 403, WORKDAY_DOWN, "text/html", method)
+            return make_resp(url, 200, GENE_SEARCH if "search-results" in url else GENE_JOB, "text/html")
+        got, status = pi.run(["Genentech"], False, False, FakeClient(handler))
+        self.assertEqual(status["Genentech"], "ok (2) via phenom")
+        self.assertEqual(len(got), 2)
+
+    def test_maintenance_without_fallback_is_reported_as_unavailable(self):
+        def handler(method, url, kw):
+            return make_resp("https://static.community.workday.com/maintenance-page.html", 403, WORKDAY_DOWN, "text/html", method)
+        _, status = pi.run(["Regeneron"], False, False, FakeClient(handler))
+        self.assertTrue(status["Regeneron"].startswith("UNAVAILABLE"), status)
+
+    def test_amgen_falls_back_to_its_radancy_site(self):
+        def handler(method, url, kw):
+            if "myworkdayjobs.com" in url:
+                return make_resp("https://static.community.workday.com/maintenance-page.html", 403, WORKDAY_DOWN, "text/html", method)
+            return make_resp(url, 200, AMGEN_SEARCH, "text/html")
+        got, status = pi.run(["Amgen"], False, False, FakeClient(handler))
+        self.assertEqual(status["Amgen"], "ok (2) via radancy")
+        self.assertEqual(len(got), 2)
+
+
+def amgen_item(jid, title, loc, posted):
+    return (f'<li><a href="/en/job/thousand-oaks/x/87/{jid}" data-job-id="{jid}">'
+            f'<span class="job-date-posted">{posted}</span><h3>{title}</h3>'
+            f'<span class="job-location">{loc}</span></a></li>')
+
+
+AMGEN_SEARCH = ('<html><body><section id="search-results" data-total-job-results="3" data-total-pages="1" '
+                'data-records-per-page="12" data-current-page="1"><ul id="search-results-list">'
+                + amgen_item("1001", "Amgen Scholars Intern - Process Development", "US - California - Thousand Oaks / and 3 other locations", "Aug. 31, 2026")
+                + amgen_item("1002", "Senior Manager, Regulatory Affairs", "US - Massachusetts - Cambridge", "Sep. 2, 2026")
+                + amgen_item("1003", "2027 Summer Intern - Data Science", "US - New Jersey - Rahway", "October 1, 2026")
+                + '</ul></section></body></html>')
+AMGEN_JOB = ('<html><body><main><div class="ats-description"><p>Join us.</p><ul><li>Analyze data</li></ul></div>'
+             '<span class="job-id">Job ID R-254668</span></main></body></html>')
+
+
+class Radancy(unittest.TestCase):
+    def test_dates_and_locations(self):
+        self.assertEqual(pi.radancy_date("Aug. 31, 2026"), "2026-08-31")
+        self.assertEqual(pi.radancy_date("September 3, 2026"), "2026-09-03")
+        self.assertEqual(pi.radancy_date("10/01/2026"), "2026-10-01")
+        self.assertEqual(pi.radancy_date("soon"), "")
+        self.assertEqual(pi._radancy_locations("US - California - Thousand Oaks / and 3 other locations"),
+                         ["US - California - Thousand Oaks"])
+
+    def test_scrape_stops_at_the_terms_result_count(self):
+        urls = []
+
+        def handler(method, url, kw):
+            urls.append(url)
+            return make_resp(url, 200, AMGEN_JOB if "/job/" in url else AMGEN_SEARCH, "text/html")
+        cfg = {"base": "https://careers.amgen.com", "path": "/en/search-jobs", "terms": ["intern"]}
+        got = pi.scrape_radancy(FakeClient(handler), "Amgen", cfg, True)
+        self.assertEqual([u for u in urls if "search-jobs" in u], ["https://careers.amgen.com/en/search-jobs/intern"])
+        self.assertEqual(sorted(p.title for p in got), ["2027 Summer Intern - Data Science",
+                                                        "Amgen Scholars Intern - Process Development"])
+        p = next(p for p in got if "Scholars" in p.title)
+        self.assertEqual((p.posted, p.req_id), ("2026-08-31", "R-254668"))
+        self.assertIn("• Analyze data", p.description)
+        self.assertEqual(pi.to_import_record(p)["locations"], ["Thousand Oaks, CA"])
+
+
+def abbvie_tile(jid, title, loc, pay, mode, jobtype, rid, expiry="01/01/0001"):
+    item = lambda cls, label, value: (f'<div class="attrax-vacancy-tile__{cls} attrax-vacancy-tile__item">'
+                                      f'<p class="attrax-vacancy-tile__item-label"> {label} </p>'
+                                      f'<p class="attrax-vacancy-tile__item-value"> {value} </p></div>')
+    return (f'<div class="attrax-vacancy-tile attrax-vacancy-tile--intern" data-jobid="{jid}">'
+            f'<a class="attrax-vacancy-tile__title attrax-vacancy-tile__item attrax-button" href="/en/job/x-jid-{jid}">{title}</a>'
+            f'<div class="attrax-vacancy-tile__salary attrax-vacancy-tile__item"><p class="attrax-vacancy-tile__salary-label attrax-vacancy-tile__item-label"> Salary </p>'
+            f'<p class="attrax-vacancy-tile__salary-value attrax-vacancy-tile__item-value">{pay}</p></div>'
+            + item("location-freetext", "Location", loc)
+            + f'<div class="attrax-vacancy-tile__option-work-location-type attrax-vacancy-tile__item"><p class="attrax-vacancy-tile__item-label"> Work location type </p><div class="attrax-vacancy-tile__item-valueset"><p class="attrax-vacancy-tile__item-value"> {mode} </p></div></div>'
+            + f'<div class="attrax-vacancy-tile__option-job-type attrax-vacancy-tile__item"><p class="attrax-vacancy-tile__item-label"> Job Type </p><div class="attrax-vacancy-tile__item-valueset"><p class="attrax-vacancy-tile__item-value"> {jobtype} </p></div></div>'
+            + item("reference", "Job ID", "3526b173-a7a5-4a8c-a530-9f5299b90abe")
+            + item("externalreference", "Job ID", rid)
+            + item("expiry", "Expiry Date", expiry)
+            + '</div>')
+
+
+ABBVIE_PAGE1 = ('<html><body><span class="attrax-pagination__total-results"> 12 result(s) </span>'
+                + abbvie_tile(33570, "2027 Global Supply Chain Intern (Undergraduate)", "North Chicago, IL", "$21 - $37.8", "Hybrid", "Intern", "R00151172", "12/15/2026")
+                + abbvie_tile(34139, "Front Desk Specialist (Maternity Backfill)", "Dubai, Dubai", "", "Hybrid", "Full time", "R00150000")
+                + '</body></html>')
+ABBVIE_PAGE2 = ('<html><body><span class="attrax-pagination__total-results"> 12 result(s) </span>'
+                + abbvie_tile(33457, "Discover Accounting and Finance at AbbVie 2027", "North Chicago, IL", "$0 - $0", "On-Site", "Intern", "R00151999")
+                + '</body></html>')
+
+
+class AbbVieSearch(unittest.TestCase):
+    def test_parse_tiles(self):
+        rows, total = pi.parse_abbvie_search(ABBVIE_PAGE1, "https://careers.abbvie.com")
+        self.assertEqual(total, 12)
+        r = rows[0]
+        self.assertEqual((r["title"], r["location"], r["pay"], r["mode"], r["req_id"], r["deadline"]),
+                         ("2027 Global Supply Chain Intern (Undergraduate)", "North Chicago, IL", "$21 - $37.8", "Hybrid", "R00151172", "2026-12-15"))
+        self.assertEqual(r["url"], "https://careers.abbvie.com/en/job/x-jid-33570")
+
+    def test_only_with_ignore_robots(self):
+        calls = []
+
+        def handler(method, url, kw):
+            calls.append(url)
+            if "/en/jobs?" in url:
+                return make_resp(url, 200, ABBVIE_PAGE1 if "page=1" in url else ABBVIE_PAGE2, "text/html")
+            return make_resp(url, 200, "<urlset xmlns='http://www.sitemaps.org/schemas/sitemap/0.9'></urlset>", "text/xml")
+        got, status = pi.run(["AbbVie"], False, False, FakeClient(handler))
+        self.assertFalse(any("/en/jobs?" in u for u in calls))  # default: robots.txt respected
+        calls.clear()
+        cfg = dict(pi.COMPANIES["AbbVie"])
+        cfg["robots_disallowed"] = {**cfg["robots_disallowed"], "terms": ["intern"]}
+        orig = pi.COMPANIES["AbbVie"]
+        pi.COMPANIES["AbbVie"] = cfg
+        try:
+            got, status = pi.run(["AbbVie"], False, False, FakeClient(handler), ignore_robots=True)
+        finally:
+            pi.COMPANIES["AbbVie"] = orig
+        self.assertEqual(status["AbbVie"], "ok (2) via abbvie_search (robots.txt ignored)")
+        by = {p.req_id: p for p in got}
+        self.assertEqual(set(by), {"R00151172", "R00151999"})  # the front-desk job is filtered out
+        self.assertEqual(by["R00151999"].pay, "")             # "$0 - $0" means not listed
+        self.assertEqual(pi.to_import_record(by["R00151172"])["mode"], "Hybrid")
+        self.assertEqual(sum("/en/jobs?" in u for u in calls), 2)  # stops at 12 results = 2 pages
+
+
+class GreenhouseDeadline(unittest.TestCase):
+    def test_application_deadline(self):
+        body = {"jobs": [{"title": "Summer Intern, Biology", "id": 7, "absolute_url": "https://x/7", "requisition_id": "P7",
+                          "location": {"name": "Redwood City, California, United States"}, "application_deadline": "2026-12-01T00:00:00Z"}]}
+        got = pi.scrape_greenhouse(FakeClient(lambda m, u, k: make_resp(u, 200, json.dumps(body))), "Revolution Medicines",
+                                   {"token": "revolutionmedicines"}, False)
+        self.assertEqual(got[0].deadline, "2026-12-01")
+
+
 if __name__ == "__main__":
     unittest.main()
+
+
+class LiveFormats(unittest.TestCase):
+    """Formats seen on the live career sites on 12 Oct 2026."""
+
+    def test_us_locations_in_every_site_format(self):
+        cases = {"US - Frederick - MD": "Frederick, MD",                 # AstraZeneca
+                 "Princeton - NJ - US": "Princeton, NJ",                 # Bristol Myers Squibb
+                 "US, Indianapolis IN": "Indianapolis, IN",              # Lilly
+                 "US: South San Francisco": "South San Francisco, CA",   # Lilly
+                 "USA - Pennsylvania - West Point": "West Point, PA",    # Merck
+                 "Ridgefield, CT, United States, Connecticut": "Ridgefield, CT",  # Boehringer
+                 "Cambridge": "Cambridge"}                               # could be anywhere without a country
+        for raw, want in cases.items():
+            self.assertEqual(pi.normalize_location(raw), want, raw)
+
+    def test_bare_us_cities_get_a_state(self):
+        p = pi.Posting(company="Regeneron", title="2027 Co-op Supply Chain", locations=["Warren", "SLEEPY HOLLOW", "Gotham"],
+                       extra={"country": "United States of America"},
+                       description="When & where:\nLocation: Warren, NJ and Tarrytown / Sleepy Hollow, NY\nGotham, NY office")
+        self.assertEqual(pi.us_locations(p), ["Warren, NJ", "Sleepy Hollow, NY", "Gotham, NY"])
+
+    def test_us_only_uses_the_sites_country(self):
+        us = pi.Posting(company="Genentech", title="Intern", location="South San Francisco", extra={"country": "United States of America"})
+        ie = pi.Posting(company="BMS", title="Intern", location="Cruiserath - IE", extra={"country": "Ireland"})
+        unknown = pi.Posting(company="Merck", title="Intern", location="4 Locations")
+        self.assertEqual([pi.is_us(x) for x in (us, ie, unknown)], [True, False, True])
+
+    def test_sections_with_each_companys_headings(self):
+        text = pi.html_to_text(
+            "<p>What You Will Achieve</p><ul><li>Own a launch plan</li></ul>"            # Pfizer
+            "<p>Program Highlights</p><ul><li>Networking events</li></ul>"              # Genentech: not a duty
+            "<p>Position Requirements:</p><ul><li>Enrolled in a BS program</li></ul>"  # AstraZeneca
+            "<p>Must-Have</p><ul><li>Python</li></ul>"                                   # Pfizer
+            "<p>What do we offer you?</p><ul><li>Housing stipend</li></ul>"             # GSK: not a qualification
+            "<p>Let’s find out if we’re a fit:</p><ul><li>Rising senior</li></ul>")    # Regeneron
+        sec = pi.extract_sections(text)
+        self.assertEqual(sec, {"resp": ["Own a launch plan"], "quals": ["Enrolled in a BS program", "Python", "Rising senior"]})
+
+    def test_paragraph_bullets(self):  # Lilly writes bullets as "· text" paragraphs
+        text = pi.html_to_text("<p>Basic Qualifications</p><p>· Enrolled in an MBA program</p><p>- Graduating by 2028</p>")
+        self.assertEqual(pi.extract_sections(text)["quals"], ["Enrolled in an MBA program", "Graduating by 2028"])
+
+    def test_deadlines(self):
+        from datetime import date
+        today = date(2026, 10, 12)
+        self.assertEqual(pi.extract_deadline("*Applications will close on November 22nd at 11:59pm EST", today), "2026-11-22")
+        self.assertEqual(pi.extract_deadline("Application deadline: January 5, 2027", today), "2027-01-05")
+        self.assertEqual(pi.extract_deadline("We review applications on a rolling basis.", today), "")
+        self.assertEqual(pi.sane_deadline("2126-09-24T12:30:22+00:00", today), "")   # AbbVie placeholder
+        self.assertEqual(pi.sane_deadline("2026-12-01", today), "2026-12-01")
+        self.assertEqual(pi.any_date("Thu Sep 17 00:00:00 UTC 2026"), "2026-09-17")
+
+    def test_workday_end_date_is_the_deadline(self):
+        detail = {"jobPostingInfo": {"title": "2027 Summer Intern - Quality Control", "location": "Hillsboro", "jobReqId": "202609-124239",
+                                     "startDate": "2026-10-05", "endDate": "2026-10-20", "country": {"descriptor": "United States of America"},
+                                     "jobDescription": "<p>The Opportunity</p><ul><li>Run QC assays</li></ul><p>$25.00-$52.00 per hour</p>"}}
+
+        def handler(method, url, kw):
+            if method == "POST":
+                return make_resp(url, 200, json.dumps({"total": 1, "jobPostings": [
+                    wd_posting("2027 Summer Intern - Quality Control", "/job/Hillsboro/QC_202609-124239")]}), method="POST")
+            if "/wday/cxs/" in url:
+                return make_resp(url, 200, json.dumps(detail))
+            return make_resp(url, 200, "<html></html>", "text/html")
+        p = pi.scrape_workday(FakeClient(handler), "Genentech", {"boards": [("roche", "wd3", "ROG-A2O-GENE")]}, True)[0]
+        rec = pi.to_import_record(p)
+        self.assertEqual((rec["deadline"], rec["first_seen"], rec["pay"], rec["req_id"]), ("2026-10-20", "2026-10-05", "$25.00-$52.00 per hour", "202609-124239"))
+        self.assertEqual(rec["locations"], ["Hillsboro, OR"])
+        self.assertEqual(rec["responsibilities"], ["Run QC assays"])
+
+    def test_page_microdata_and_job_id(self):
+        bi = ('<html><body><span itemprop="jobLocation"></span><meta itemprop="datePosted" content="Thu Sep 17 00:00:00 UTC 2026">'
+              '<div class="jobdescription"><p>Duties &amp; Responsibilities</p><ul><li>Plan supply</li></ul><p>$24 to $33 per hour</p></div></body></html>')
+        p = pi.Posting(company="Boehringer Ingelheim", title="Intern", url="https://jobs.boehringer-ingelheim.com/job/x/1438182733/")
+        pi.enrich_from_page(FakeClient(lambda m, u, k: make_resp(u, 200, bi, "text/html")), p, (".jobdescription",))
+        self.assertEqual((p.posted, p.pay), ("2026-09-17", "$24 to $33 per hour"))
+        amgen = ('<html><head><script type="application/ld+json">{"@type": "JobPosting", "datePosted": "2026-09-01", '
+                 '"identifier": {"@type": "PropertyValue", "name": "Job ID", "value": "R-254668"}, "description": "<p>Join us.</p>", '
+                 '"baseSalary": {"@type": "MonetaryAmount", "currency": "", "value": {"@type": "QuantitativeValue", "unitText": ""}}}'
+                 '</script></head><body></body></html>')
+        q = pi.Posting(company="Amgen", title="Undergrad Intern", url="https://careers.amgen.com/en/job/x/87/1")
+        pi.enrich_from_page(FakeClient(lambda m, u, k: make_resp(u, 200, amgen, "text/html")), q, ("main",))
+        self.assertEqual((q.req_id, q.posted, q.pay), ("R-254668", "2026-09-01", ""))
+
+    def test_lilly_cmp_is_filtered_now(self):
+        self.assertEqual(pi.COMPANIES["Eli Lilly"]["boards"], [("lilly", "wd115", "CMP"), ("lilly", "wd115", "LLY")])
+
+
+class NewCompanies(unittest.TestCase):
+    """Gilead, Novartis, Biogen (Workday), Recursion, Generate (Greenhouse), insitro (Ashby), checked live 12 Oct 2026."""
+
+    def test_config(self):
+        want = {"Gilead Sciences": ("workday", "gilead"), "Novartis": ("workday", "novartis"), "Biogen": ("workday", "biogen"),
+                "Recursion": ("greenhouse", "recursion"), "Generate:Biomedicines": ("greenhouse", "generate"), "insitro": ("ashby", "insitro")}
+        for name, (platform, cid) in want.items():
+            self.assertEqual((pi.COMPANIES[name]["platform"], pi.COMPANIES[name]["id"]), (platform, cid), name)
+        for gone in ("Alnylam", "BioMarin", "Exelixis", "Arcus Biosciences", "Dyno Therapeutics"):
+            self.assertNotIn(gone, pi.COMPANIES)
+
+    def test_talent_pool_postings_are_not_internships(self):
+        self.assertFalse(pi.is_internship("Interested in an internship?"))   # Recursion's standing post
+        self.assertTrue(pi.is_internship("Co-op, Cell Models and Molecular Biology"))
+
+    def test_greenhouse_several_locations(self):
+        body = json.dumps({"jobs": [{"title": "Summer Intern, Computational Biology", "id": 7, "requisition_id": "P3100",
+                                     "absolute_url": "https://job-boards.greenhouse.io/recursionpharmaceuticals/jobs/7",
+                                     "location": {"name": "New York, New York; Salt Lake City, Utah"},
+                                     "first_published": "2026-10-01T00:00:00-04:00", "content": "&lt;p&gt;$30 - $40 per hour&lt;/p&gt;"}]})
+        p = pi.scrape_greenhouse(FakeClient(lambda m, u, k: make_resp(u, 200, body)), "Recursion", {"token": "recursionpharmaceuticals"}, True)[0]
+        self.assertEqual(pi.to_import_record(p)["locations"], ["New York, NY", "Salt Lake City, UT"])
+        self.assertEqual((p.req_id, p.pay), ("P3100", "$30 - $40 per hour"))
+
+    def test_ashby(self):
+        body = json.dumps({"jobs": [
+            {"id": "0bff19c6-e165-4be7-a32a-6beeffb51ffa", "title": "Machine Learning Intern (Summer 2027)", "employmentType": "Intern",
+             "location": "South San Francisco, CA", "secondaryLocations": [{"location": "Remote (US)"}], "isListed": True,
+             "publishedAt": "2026-09-21T23:40:31.103+00:00", "workplaceType": "Hybrid",
+             "jobUrl": "https://jobs.ashbyhq.com/insitro/0bff19c6-e165-4be7-a32a-6beeffb51ffa",
+             "descriptionHtml": "<p>What you'll do</p><ul><li>Train models</li></ul>",
+             "compensation": {"compensationTierSummary": "$45 – $55 per hour"}},
+            {"id": "1", "title": "Research Associate", "employmentType": "Intern", "isListed": True, "location": "Boston, MA", "jobUrl": "u1"},
+            {"id": "2", "title": "Full Stack Software Engineer", "employmentType": "FullTime", "isListed": True, "location": "x", "jobUrl": "u2"}]})
+        got = pi.scrape_ashby(FakeClient(lambda m, u, k: make_resp(u, 200, body)), "insitro", {"org": "insitro"}, True)
+        self.assertEqual(sorted(p.title for p in got), ["Machine Learning Intern (Summer 2027)", "Research Associate"])  # Ashby says Intern
+        rec = pi.to_import_record(next(p for p in got if "Machine" in p.title))
+        self.assertEqual((rec["first_seen"], rec["pay"], rec["mode"]), ("2026-09-21", "$45 – $55 per hour", "Hybrid"))
+        self.assertEqual(rec["responsibilities"], ["Train models"])
+
+    def test_biogen_headings(self):
+        text = pi.html_to_text("<p>Key Deliverables and Responsibilities:</p><ul><li>Culture iPSC lines</li></ul>"
+                               "<p>Ideal Candidate:</p><ul><li>Rising senior in biology</li></ul>"
+                               "<p>The base compensation range for this role is: $29.00-$33.00</p>")
+        self.assertEqual(pi.extract_sections(text), {"resp": ["Culture iPSC lines"], "quals": ["Rising senior in biology"]})
+        self.assertEqual(pi.extract_pay(text), "$29.00-$33.00")
+
+
+class Summaries(unittest.TestCase):
+    """The job details pop-up shows the start of the job description, not the company's 'About us'."""
+
+    def test_skips_company_blurb(self):
+        text = ("Job Description\nAt Gilead, we’re creating a healthier world for all people. For more than 35 years, we’ve "
+                "tackled diseases such as HIV.\nEvery member of Gilead’s team plays a critical role in discovery.\n"
+                "Intern - Research - Pathobiology - AI\nAs an intern on the Pathobiology team, you will build deep learning "
+                "models for whole-slide images. You will automate image analysis pipelines.\nRequired Qualifications:\n• Python")
+        self.assertEqual(pi.job_summary(text, "Gilead Sciences", "Intern - Research - Pathobiology - AI"),
+                         "As an intern on the Pathobiology team, you will build deep learning models for whole-slide images. "
+                         "You will automate image analysis pipelines.")
+
+    def test_skips_about_sections_and_slogans(self):
+        text = ("Join Amgen’s Mission of Serving Patients\nAt Amgen, if you feel like you’re part of something bigger, it’s because "
+                "you are.\nWhat You Will Do\nLet’s do this. Let’s change the world. In this vital role you will support financial "
+                "planning for Operations.\nWhat You Can Expect of Us\nWe offer competitive benefits.")
+        self.assertEqual(pi.job_summary(text, "Amgen", ""), "In this vital role you will support financial planning for Operations.")
+
+    def test_bullets_only(self):
+        self.assertEqual(pi.job_summary("The Opportunity\n• Run assays\n• Analyze data", "Genentech", ""), "Run assays. Analyze data.")
+
+    def test_import_record_uses_it(self):
+        p = pi.Posting(company="Amgen", title="Intern", description="About Amgen\nAmgen is a pioneer in biotech.\nThe Role\nYou will build ML models.")
+        self.assertEqual(pi.to_import_record(p)["description"], "You will build ML models.")

@@ -36,6 +36,7 @@ const { POST: ingest } = await import("../app/api/ingest/route")
 const authRoute = await import("../app/api/auth/[...path]/route")
 const openRoute = await import("../app/api/ingest/open/route")
 const closeRoute = await import("../app/api/ingest/close/route")
+const flagRoute = await import("../app/api/ingest/flag/route")
 const prisma = db()
 
 const job = (id: string, extra: Record<string, unknown> = {}) => ({
@@ -333,6 +334,7 @@ describe("scraper ingest", () => {
 describe("job IDs, locations and the open/closed check", () => {
   before(wipe)
   const token = () => process.env.SCRAPER_INGEST_TOKEN!
+  const list = (t?: string) => openRoute.GET(new Request("http://localhost/api/ingest/open", { headers: t ? { authorization: "Bearer " + t } : {} }))
   const ingestJson = (rows: unknown[]) =>
     ingest(new Request("http://localhost/api/ingest?reviewAll=0", { method: "POST", body: JSON.stringify(rows), headers: { authorization: "Bearer " + token() } }))
   const base = {
@@ -365,7 +367,6 @@ describe("job IDs, locations and the open/closed check", () => {
   })
 
   it("lists open postings and marks the closed ones taken down, with the token only", async () => {
-    const list = (t?: string) => openRoute.GET(new Request("http://localhost/api/ingest/open", { headers: t ? { authorization: "Bearer " + t } : {} }))
     assert.equal((await list()).status, 401)
     const open = (await (await list(token())).json()).postings as { id: string; reqId: string; url: string }[]
     assert.equal(open.length, 2)
@@ -379,6 +380,25 @@ describe("job IDs, locations and the open/closed check", () => {
     assert.equal((await prisma.posting.findUnique({ where: { id: open[0].id } }))?.closed, true)
     assert.equal((await (await list(token())).json()).postings.length, 1)
     assert.equal(await prisma.auditLog.count({ where: { action: "postings.check-closed" } }), 1)
+  })
+
+  it("sends postings the checker couldn't confirm to the review queue", async () => {
+    const open = (await (await list(token())).json()).postings as { id: string }[]
+    assert.equal(open.length, 1)
+    const flag = (body: unknown, t = token()) =>
+      flagRoute.POST(new Request("http://localhost/api/ingest/flag", { method: "POST", body: JSON.stringify(body), headers: { authorization: "Bearer " + t } }))
+    assert.equal((await flag({ ids: [open[0].id] }, "wrong")).status, 401)
+    const out = await (await flag({ ids: [open[0].id, "nope"], reasons: { [open[0].id]: "posting page answered 500" } })).json()
+    assert.equal(out.flagged, 1)
+    const row = await prisma.posting.findUnique({ where: { id: open[0].id } })
+    assert.equal(row?.state, "review")
+    const review = row?.review as { source: string; flags: string[]; status: string }
+    assert.equal(review.source, "check")
+    assert.equal(review.status, "pending")
+    assert.match(review.flags[0], /Couldn't confirm.*answered 500/)
+    assert.equal((await (await list(token())).json()).postings.length, 0) // not re-checked while in review
+    assert.equal((await (await flag({ ids: [open[0].id] })).json()).flagged, 0) // already there
+    assert.equal(await prisma.auditLog.count({ where: { action: "postings.check-unconfirmed" } }), 1)
   })
 })
 

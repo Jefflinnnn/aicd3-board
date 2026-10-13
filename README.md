@@ -96,22 +96,24 @@ The skill (`.claude/skills/scrape-internships/SKILL.md`, local) runs these steps
 
 Set `AICD3_URL` and `AICD3_INGEST_TOKEN` in your shell for step 5. Or upload `scraper/out/import.json` on **Admin → Import postings**.
 
-**Matching and locations.** Each posting keeps the company's own job ID (`req_id`, e.g. `R-254668`), shown in the job details and searchable on the job board and Admin page. An import matches postings by company + job ID first, then by link, then by title, so a retitled posting or a moved Workday link updates the existing posting instead of creating a new one. Locations are cleaned up on the way in (`lib/locations.ts`, and `normalize_location` in the scraper): "US - New Jersey - Rahway" becomes "Rahway, NJ", "United States - Remote" becomes "Remote (US)", so they line up with the map.
+**Matching and locations.** Each posting keeps the company's own job ID (`req_id`, e.g. `R-254668`), shown in the job details and searchable on the job board and Admin page. An import matches postings by company + job ID first, then by link, then by title, so a retitled posting or a moved Workday link updates the existing posting instead of creating a new one. Locations are cleaned up on the way in (`lib/locations.ts`, and `normalize_location` in the scraper): "US - New Jersey - Rahway" becomes "Rahway, NJ", "Princeton - NJ - US" becomes "Princeton, NJ", "United States - Remote" becomes "Remote (US)", so they line up with the map. Workday sites that list a US city without its state ("SLEEPY HOLLOW", "South San Francisco") get the state from the description or a table of known sites.
 
 **Checking what's still open.** Between full scrapes, re-check every open posting's own page:
 
 ```bash
-python3 scraper/check_open.py            # report: still open / closed / couldn't check
-python3 scraper/check_open.py --apply    # also mark the closed ones "Taken down"
+python3 scraper/check_open.py            # report: still open / closed / needs a manual check
+python3 scraper/check_open.py --apply    # mark the closed ones "Taken down", send the unsure ones to review
 ```
 
-It reads the open postings from `/api/ingest/open`, asks Workday's detail record, Greenhouse's job board API, or the posting page itself, at the same polite pace as the scraper, and sends closed ones to `/api/ingest/close`. Anything it can't confirm (a bot check, a timeout, a server error) is left alone. Staff can reopen a posting from the Admin page if a check was wrong; every closure is in the audit log.
+It reads the open postings from `/api/ingest/open`, asks Workday's detail record, Greenhouse's or Ashby's job board API, or the posting page itself, at the same polite pace as the scraper, and sends closed ones to `/api/ingest/close`. A posting it can't confirm either way (a bot check, a timeout, a server error) goes to the staff review queue through `/api/ingest/flag`, marked "Couldn't confirm it's still open" with the reason: Approve puts it back on the job board, Reject keeps it off. If every posting on one site fails (the whole site is down), those stay on the board and are only reported; add `--flag-site-outages` to send them to review anyway. Staff can reopen a closed posting from the Admin page if a check was wrong; every closure and flag is in the audit log.
 
 On Bedrock, pin the model so the subagents use it too (they inherit it):
 
 ```bash
 CLAUDE_CODE_USE_BEDROCK=1 AWS_REGION=us-east-1 claude --model us.anthropic.claude-sonnet-5
 ```
+
+By default the scraper also uses routes robots.txt disallows: today that's AbbVie's job search, which has real titles, locations, pay, work type, R-numbers and expiry dates. Pass `--respect-robots` to use allowed routes only (the AbbVie sitemap instead), which still covers every company. The pace is the same either way (one request at a time per site, 1.5–3 s apart) and it still stops at bot checks. Check the sites' terms of use. When Workday is down (weekend maintenance), Genentech falls back to careers.gene.com automatically.
 
 The scraper can also run on its own: `pip install -r scraper/requirements.txt`, then `python3 scraper/pharma_internships.py --help`. Its tests are `cd scraper && python3 -m unittest test_pharma_internships test_extract test_check_open`.
 

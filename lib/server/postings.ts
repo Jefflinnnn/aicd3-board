@@ -42,7 +42,7 @@ export const jobSchema = z.object({
 })
 export const reviewSchema = z.object({
   flags: z.array(text(300)).max(30),
-  source: z.enum(["import", "held", "pulled"]),
+  source: z.enum(["import", "held", "pulled", "check"]),
   at: z.number().int().nonnegative(),
   status: z.enum(["pending", "rejected"]),
   decidedAt: z.number().int().nonnegative().optional(),

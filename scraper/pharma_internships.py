@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
 """
-pharma_internships.py - collect internship / co-op postings from 15 pharma & biotech
-career sites using the public JSON feeds and sitemaps that power those sites.
+pharma_internships.py - collect internship / co-op postings from 21 pharma & biotech
+career sites using the public JSON feeds and pages that power those sites.
 
 Platforms covered (verified October 2026):
   * Workday "cxs" JSON API  - Pfizer, Merck/MSD, AstraZeneca, BMS, Sanofi, GSK, Vertex,
-                              Regeneron, Genentech (Roche), Amgen, Eli Lilly, Takeda
-  * Greenhouse Job Board API - Revolution Medicines
+                              Regeneron, Genentech (Roche), Amgen, Eli Lilly, Takeda,
+                              Gilead, Novartis, Biogen
+  * Greenhouse Job Board API - Revolution Medicines, Recursion, Generate:Biomedicines
+  * Ashby posting API        - insitro
   * SAP SuccessFactors CSB   - Boehringer Ingelheim (server-rendered search pages)
-  * Vacancy XML sitemap      - AbbVie (careers.abbvie.com, robots.txt disallows /jobs?*)
+  * AbbVie job search        - careers.abbvie.com (its vacancy sitemap with --respect-robots)
+  * Backups when Workday is down: careers.gene.com (Phenom) for Genentech,
+    careers.amgen.com (Radancy) for Amgen
 
 Usage:
   pip install -r scraper/requirements.txt
@@ -26,6 +30,10 @@ data centre (e.g. wd5) share a small concurrency cap.
 Be a polite client: the defaults use a 1.5-3 s delay per request per host, retry with
 exponential backoff on 429/5xx, honour Retry-After, and stop (instead of hammering) when a
 site returns a bot challenge. Review each site's terms of use before running at scale.
+
+robots.txt: by default the script also uses routes robots.txt disallows (today AbbVie's job
+search, which has better data than its sitemap). Pass --respect-robots to use allowed routes only,
+which still cover every company. The pace and the stop-on-block rule are the same either way.
 """
 from __future__ import annotations
 
@@ -68,7 +76,12 @@ COMPANIES: dict[str, dict] = {
                                        "bachelorstage", "pflichtpraktikant"]},
     "Merck":                {"id": "merck", "platform": "workday", "boards": [("msd", "wd5", "SearchJobs")]},
     "AbbVie":               {"id": "abbvie", "platform": "abbvie_sitemap",
-                             "sitemap": "https://careers.abbvie.com/sitemap.xml"},
+                             "sitemap": "https://careers.abbvie.com/sitemap.xml",
+                             # used by default (robots.txt disallows /jobs?*; --respect-robots skips it), which
+                             # gives real titles, locations, pay, work type, R-numbers and expiry dates
+                             "robots_disallowed": {"platform": "abbvie_search", "base": "https://careers.abbvie.com",
+                                                   "path": "/en/jobs",
+                                                   "terms": ["intern", "internship", "co-op", "praktikum", "werkstudent"]}},
     "AstraZeneca":          {"id": "astrazeneca", "platform": "workday", "boards": [("astrazeneca", "wd3", "Careers")]},
     "Bristol Myers Squibb": {"id": "bms", "platform": "workday", "boards": [("bristolmyerssquibb", "wd5", "BMS")]},
     "Sanofi":               {"id": "sanofi", "platform": "workday", "boards": [("sanofi", "wd3", "SanofiCareers")],
@@ -82,13 +95,25 @@ COMPANIES: dict[str, dict] = {
                                           ("vrtx", "wd501", "Vertex_Careers")],
                                "alt_hosts": ["wd5"]},
     "Regeneron":            {"id": "regeneron", "platform": "workday", "boards": [("regeneron", "wd1", "Careers")]},
-    "Genentech":            {"id": "genentech", "platform": "workday", "boards": [("roche", "wd3", "ROG-A2O-GENE")]},
-    "Amgen":                {"id": "amgen", "platform": "workday", "boards": [("amgen", "wd1", "Careers")]},
+    "Genentech":            {"id": "genentech", "platform": "workday", "boards": [("roche", "wd3", "ROG-A2O-GENE")],
+                             # careers.gene.com (Phenom) lists the same jobs; used when Workday fails
+                             "fallback": {"platform": "phenom", "base": "https://careers.gene.com", "path": "/us/en",
+                                          "terms": ["intern", "internship", "co-op"]}},
+    "Amgen":                {"id": "amgen", "platform": "workday", "boards": [("amgen", "wd1", "Careers")],
+                             # careers.amgen.com (Radancy/TalentBrew) lists the same jobs; used when Workday fails
+                             "fallback": {"platform": "radancy", "base": "https://careers.amgen.com", "path": "/en/search-jobs",
+                                          "terms": ["intern", "internship", "co-op"]}},
     "Eli Lilly":            {"id": "lilly", "platform": "workday",
-                             "boards": [("lilly", "wd115", "CMP", {"all": True}),   # "Student Career Opportunities"
-                                        ("lilly", "wd115", "LLY")],
+                             # CMP used to be student-only; since Oct 2026 it lists every kind of job, so filter it too
+                             "boards": [("lilly", "wd115", "CMP"), ("lilly", "wd115", "LLY")],
                              "alt_hosts": ["wd5"]},
     "Revolution Medicines": {"id": "revmed", "platform": "greenhouse", "token": "revolutionmedicines"},
+    "Gilead Sciences":      {"id": "gilead", "platform": "workday", "boards": [("gilead", "wd1", "gileadcareers")]},
+    "Novartis":             {"id": "novartis", "platform": "workday", "boards": [("novartis", "wd3", "Novartis_Careers")]},
+    "Biogen":               {"id": "biogen", "platform": "workday", "boards": [("biibhr", "wd3", "external")]},
+    "Recursion":            {"id": "recursion", "platform": "greenhouse", "token": "recursionpharmaceuticals"},
+    "Generate:Biomedicines": {"id": "generate", "platform": "greenhouse", "token": "generatebiomedicines"},
+    "insitro":              {"id": "insitro", "platform": "ashby", "org": "insitro"},
     "Takeda":               {"id": "takeda", "platform": "workday", "boards": [("takeda", "wd502", "External")],
                              "alt_hosts": ["wd3"]},
 }
@@ -105,7 +130,9 @@ INTERN_RE = re.compile(
     re.IGNORECASE,
 )
 # "Late-Stage Oncology" / "early-stage" mention a drug's phase, not an internship ("stage").
-NOT_INTERN_RE = re.compile(r"(?<![A-Za-z])(early|late|mid)[-\s]stage(?![A-Za-z])", re.IGNORECASE)
+NOT_INTERN_RE = re.compile(r"(?<![A-Za-z])(early|late|mid)[-\s]stage(?![A-Za-z])|"
+                           # talent-pool postings ("Interested in an internship?"), not openings
+                           r"^\s*(?:interested in|don'?t see|general (?:application|interest)|join our talent)", re.IGNORECASE)
 WORKDAY_TERMS = ["intern", "internship", "co-op"]
 
 DEFAULT_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -136,6 +163,13 @@ class Posting:
 
 class BlockedError(RuntimeError):
     """Raised when a site answers with a bot challenge / WAF block page."""
+
+
+class UnavailableError(RuntimeError):
+    """Raised when a site is down for maintenance (e.g. Workday's weekend maintenance page)."""
+
+
+MAINTENANCE_MARKERS = ("maintenance-page", "currently unavailable", "service interruption", "scheduled maintenance")
 
 
 # --------------------------------------------------------------------------------------
@@ -185,9 +219,15 @@ class PoliteClient:
 
     @staticmethod
     def _check_block(resp: requests.Response) -> None:
-        """Turn WAF / bot-challenge answers into a clear BlockedError."""
+        """Turn WAF / bot-challenge answers into a clear BlockedError (or UnavailableError for maintenance)."""
         ctype = resp.headers.get("Content-Type", "")
+        # Pages that don't name a charset are UTF-8 in practice; older `requests` versions assume
+        # ISO-8859-1 for text/*, which garbles "–", "é" and the like.
+        if "charset" not in ctype.lower() and ("html" in ctype or "json" in ctype or "xml" in ctype):
+            resp.encoding = "utf-8"
         head = resp.text[:20000].lower() if "html" in ctype else ""
+        if any(m in head or m in (resp.url or "").lower() for m in MAINTENANCE_MARKERS):
+            raise UnavailableError(f"{resp.request.method} {resp.url} -> the site is down for maintenance; try again later.")
         hard_marker = any(m in head for m in ("cf-chl", "challenge-platform", "px-captcha",
                                               "_incapsula_resource", "g-recaptcha", "hcaptcha"))
         soft_marker = any(m in head for m in BLOCK_MARKERS)
@@ -268,6 +308,7 @@ def html_to_text(markup: str | None) -> str:
     for el in soup.find_all(_BLOCK_TAGS):
         el.append("\n")
     lines = [clean(l) for l in soup.get_text("").splitlines()]
+    lines = [re.sub(r"^[·●▪◦*–-]\s+", "• ", l) for l in lines]   # bullets typed as paragraphs
     out, blank = [], False
     for l in lines:
         if l in ("", "•"):
@@ -299,13 +340,23 @@ def extract_pay(text: str) -> str:
 
 
 SECTION_HEADS = {
-    "resp": re.compile(r"^(?:key\s+|your\s+|main\s+|primary\s+)?(?:responsibilit|duties|what you(?:'|’)?ll do|what you will do|"
+    "resp": re.compile(r"^(?:key\s+|your\s+|main\s+|primary\s+|position\s+|examples of key\s+)?(?:responsibilit|duties|"
+                       r"what you(?:'|’)?ll do|what you will do|what will you do|what you will achieve|"
                        r"the role|role overview|key activities|day to day|day-to-day|in this role|job description|"
-                       r"your mission|tasks|what you will be doing)", re.I),
-    "quals": re.compile(r"^(?:basic |minimum |preferred |required |desired )?(?:qualifications?|requirements?|"
+                       r"your mission|tasks|what you will be doing|your impact|the opportunity|projects may include|"
+                       r"during your internship|key deliverables|deliverables)", re.I),
+    "quals": re.compile(r"^(?:basic |minimum |preferred |required |desired |position |additional )?(?:qualifications?|requirements?|"
                         r"what you(?:'|’)?ll bring|what you bring|who you are|eligibility|program eligibility|"
-                        r"skills|experience|education|about you|your profile|we(?:'|’)?re looking for)", re.I),
+                        r"skills|experience|education|about you|your profile|we(?:'|’)?re looking for|"
+                        r"must[- ]haves?|nice[- ]to[- ]haves?|what we expect of you|what are we looking for|"
+                        r"what you will need|let(?:'|’)?s find out if|you(?:'|’)?re basic requirements|your basic requirements|"
+                        r"additional (?:skills|preferences)|preferences|ideal candidate)", re.I),
 }
+# Headings after which bullets are not responsibilities or qualifications (pay, benefits, about us...).
+SECTION_STOP = re.compile(r"^(?:compensation|salary|pay\b|benefits?|what (?:do )?we offer|what you can expect|why |about |"
+                          r"program (?:highlights|details)|additional information|flex|disclosure|eeo|equal opportunity|"
+                          r"how we work|our ways|\w+ offers?\b|company overview|organization overview|who we are|"
+                          r"supporting people|candidate rights|data protection|us and puerto rico|current employees|#)", re.I)
 
 
 def extract_sections(text: str, limit: int = 8) -> dict[str, list[str]]:
@@ -317,11 +368,17 @@ def extract_sections(text: str, limit: int = 8) -> dict[str, list[str]]:
         if not bare:
             continue
         is_head = len(bare) < 80 and not bare.startswith("•")
+        if is_head and SECTION_STOP.search(bare):
+            current = None
+            continue
         hit = next((k for k, rx in SECTION_HEADS.items() if is_head and rx.search(bare)), None)
         if hit:
             current = hit
             continue
-        if is_head and len(bare) < 50 and bare.endswith(":"):
+        # a different heading ("Program Highlights", "What do we offer you?") ends the section; a lead-in
+        # line ("Key responsibilities include:") or an ordinary sentence doesn't
+        if is_head and len(bare) < 60 and not line.strip().endswith((":", ".", ",", ";")) and not current is None \
+                and re.match(r"^[A-Z][\w’'&/(),-]*(?:\s+[\w’'&/(),-]+){0,7}\??$", bare):
             current = None
             continue
         if current and bare.startswith("•") and len(out[current]) < limit:
@@ -380,37 +437,70 @@ def _state(s: str) -> str | None:
     return _STATES.get(t.lower())
 
 
-def normalize_location(raw: str) -> str:
+# US sites career sites list without a state (Workday "South San Francisco", "SLEEPY HOLLOW"). Only used
+# when the site says the job is in the US, since "Cambridge" or "Athens" alone could be anywhere.
+CITY_STATE = {
+    "south san francisco": "CA", "san francisco": "CA", "thousand oaks": "CA", "oceanside": "CA", "vacaville": "CA",
+    "redwood city": "CA", "san diego": "CA", "irvine": "CA", "foster city": "CA", "hillsboro": "OR",
+    "sleepy hollow": "NY", "tarrytown": "NY", "armonk": "NY", "rensselaer": "NY", "new york city": "NY",
+    "warren": "NJ", "rahway": "NJ", "princeton": "NJ", "lawrenceville": "NJ", "new brunswick": "NJ", "summit": "NJ",
+    "bridgewater": "NJ", "morristown": "NJ", "cambridge": "MA", "boston": "MA", "lexington": "MA", "devens": "MA",
+    "waltham": "MA", "seattle": "WA", "bothell": "WA", "indianapolis": "IN", "north chicago": "IL", "mettawa": "IL",
+    "lake county": "IL", "ridgefield": "CT", "west greenwich": "RI", "durham": "NC", "zebulon": "NC",
+    "research triangle park": "NC", "rockville": "MD", "gaithersburg": "MD", "frederick": "MD", "wilmington": "DE",
+    "upper merion": "PA", "upper providence": "PA", "collegeville": "PA", "west point": "PA", "philadelphia": "PA",
+    "swiftwater": "PA", "columbus": "OH", "athens": "GA", "johns creek": "GA", "saint joseph": "MO",
+    "st. joseph": "MO", "holly springs": "NC", "new albany": "OH", "lebanon": "IN", "kenilworth": "NJ",
+}
+
+
+def _city(s: str) -> str:
+    """'SLEEPY HOLLOW' -> 'Sleepy Hollow' (leave mixed-case names alone)."""
+    return s.title() if s.isupper() and len(s) > 3 else s
+
+
+def normalize_location(raw: str, us: bool = False) -> str:
     """Career-site location formats -> the board's "City, ST" form (same rules as lib/locations.ts):
-    "US - New Jersey - Rahway" -> "Rahway, NJ"; "Redwood City, California, United States" -> "Redwood City, CA";
-    "Columbus, United States, Ohio" -> "Columbus, OH"; "North Chicago IL" -> "North Chicago, IL";
+    "US - New Jersey - Rahway" -> "Rahway, NJ"; "US - Frederick - MD" -> "Frederick, MD";
+    "Princeton - NJ - US" -> "Princeton, NJ"; "US, Indianapolis IN" -> "Indianapolis, IN";
+    "Redwood City, California, United States" -> "Redwood City, CA"; "Columbus, United States, Ohio" -> "Columbus, OH";
+    "North Chicago IL" -> "North Chicago, IL"; with us=True (the site says the job is in the US),
+    "SLEEPY HOLLOW" -> "Sleepy Hollow, NY" for known US sites;
     "United States - Remote" -> "Remote (US)"; "Germany - Ingelheim" -> "Ingelheim, Germany". Else unchanged."""
     loc = clean(raw)
     if not loc:
         return loc
     if re.search(r"\bremote\b", loc, re.I) and (re.search(r"\b(us|usa|united states)\b", loc, re.I) or loc.lower() == "remote"):
         return "Remote (US)"
+    m = re.match(r"^(?:US|USA|United States(?: of America)?)\s*[,:]\s*(.+)$", loc, re.I)
+    if m:                                                          # "US, Indianapolis IN" / "US: South San Francisco"
+        return normalize_location(m.group(1), True)
     dashed = [clean(x) for x in re.split(r"\s+-\s+|\s*–\s*", loc) if clean(x)]
     parts = dashed if len(dashed) >= 2 else ([clean(x) for x in loc.split("-")] if re.match(r"^(US|USA)-[A-Za-z]{2}-", loc) else dashed)
     if len(parts) >= 3 and _US.match(parts[0]) and _state(parts[1]):
-        return f"{parts[2]}, {_state(parts[1])}"
+        return f"{_city(parts[2])}, {_state(parts[1])}"
+    if len(parts) == 3 and _US.match(parts[0]) and _state(parts[2]):     # "US - Frederick - MD"
+        return f"{_city(parts[1])}, {_state(parts[2])}"
+    if len(parts) == 3 and _US.match(parts[2]) and _state(parts[1]):     # "Princeton - NJ - US"
+        return f"{_city(parts[0])}, {_state(parts[1])}"
     if len(parts) == 2 and _US.match(parts[0]):
-        return parts[1]
+        return normalize_location(parts[1], True) if not _state(parts[1]) else parts[1]
     if len(parts) >= 2 and not _US.match(parts[0]) and "," not in loc and re.fullmatch(r"[A-Za-z .'()]+", parts[0]):
         return f"{parts[-1]}, {parts[0]}"
     c = [clean(x) for x in loc.split(",") if clean(x)]
     if len(c) >= 2:
         if _state(c[1]) and (len(c) == 2 or _US.match(c[2])):
-            return f"{c[0]}, {_state(c[1])}"
+            return f"{_city(c[0])}, {_state(c[1])}"
         if len(c) == 3 and _US.match(c[1]) and _state(c[2]):
-            return f"{c[0]}, {_state(c[2])}"
+            return f"{_city(c[0])}, {_state(c[2])}"
         if len(c) == 2 and _US.match(c[1]):
-            return c[0]
+            return normalize_location(c[0], True)
         return loc
     m = re.match(r"^(.+?)\s+([A-Za-z]{2})$", loc)
     if m and m.group(2).upper() in _CODES and re.search(r"[a-z]", m.group(1)):
         return f"{m.group(1)}, {m.group(2).upper()}"
-    return loc
+    st = CITY_STATE.get(loc.lower()) if us else None
+    return f"{_city(loc)}, {st}" if st else loc
 
 
 def posted_to_date(text: str, today: date | None = None) -> str:
@@ -427,10 +517,51 @@ def posted_to_date(text: str, today: date | None = None) -> str:
     return (today - timedelta(days=int(m.group(1)))).isoformat() if m else ""
 
 
+def sane_deadline(value: str, today: date | None = None) -> str:
+    """A YYYY-MM-DD closing date, or "" for placeholders (AbbVie lists validThrough 100 years out)."""
+    d = str(value or "")[:10]
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", d):
+        return ""
+    today = today or date.today()
+    try:
+        when = date.fromisoformat(d)
+    except ValueError:
+        return ""
+    return d if today - timedelta(days=365) <= when <= today + timedelta(days=2 * 365) else ""
+
+
+_MONTH_NAMES = ["january", "february", "march", "april", "may", "june", "july", "august", "september",
+                "october", "november", "december"]
+DEADLINE_RE = re.compile(
+    r"(?:application deadline|deadline to apply|apply by|closing date|applications? (?:will )?(?:close|are due|due)|"
+    r"accepting applications (?:through|until))\W{0,10}(?:on\s+|is\s+)?(?:[A-Za-z]+day,?\s+)?"
+    r"(?P<mon>jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(?P<day>\d{1,2})(?:st|nd|rd|th)?"
+    r"(?:,?\s+(?P<year>20\d\d))?", re.I)
+
+
+def extract_deadline(text: str, today: date | None = None) -> str:
+    """'Applications will close on November 22nd at 11:59pm' -> the next such date, as YYYY-MM-DD."""
+    m = DEADLINE_RE.search(text or "")
+    if not m:
+        return ""
+    today = today or date.today()
+    month = [n[:3] for n in _MONTH_NAMES].index(m.group("mon").lower()[:3]) + 1
+    year = int(m.group("year")) if m.group("year") else today.year
+    try:
+        when = date(year, month, int(m.group("day")))
+    except ValueError:
+        return ""
+    if not m.group("year") and when < today - timedelta(days=30):
+        when = when.replace(year=year + 1)
+    return sane_deadline(when.isoformat(), today)
+
+
 def apply_detail_text(p: Posting, text: str) -> None:
     p.description = text[:20000]
     if not p.pay:
         p.pay = extract_pay(text)
+    if not p.deadline:
+        p.deadline = extract_deadline(text)
 
 
 # --------------------------------------------------------------------------------------
@@ -532,6 +663,8 @@ def scrape_workday(client: PoliteClient, company: str, cfg: dict, details: bool)
                         posted=clean(jp.get("postedOn")),
                         req_id=bullets[0] if bullets else "",
                         url=f"{board}{path}", source=f"workday:{tenant}/{site}")
+        except UnavailableError:
+            raise
         except (BlockedError, requests.HTTPError) as e:
             log.warning("%s: JSON API failed (%s) - falling back to sitemap", company, e)
             for p in workday_sitemap(client, tenant, host, site):
@@ -551,6 +684,7 @@ def scrape_workday(client: PoliteClient, company: str, cfg: dict, details: bool)
                     p.start_date = info.get("startDate", "") or ""
                     if p.start_date:
                         p.posted = p.start_date[:10]
+                    p.deadline = sane_deadline(info.get("endDate") or "")   # "Posting end date" when the tenant sets one
                     p.extra = {"startDate": p.start_date,
                                "timeType": info.get("timeType", ""),
                                "remoteType": info.get("remoteType", ""),
@@ -573,14 +707,42 @@ def scrape_greenhouse(client: PoliteClient, company: str, cfg: dict, details: bo
     for j in r.json().get("jobs", []):
         if not is_internship(j.get("title", "")):
             continue
+        locs = [clean(x) for x in re.split(r"\s*;\s*", (j.get("location") or {}).get("name") or "") if clean(x)]
         p = Posting(
-            company=company, title=clean(j["title"]),
-            location=clean((j.get("location") or {}).get("name")),
+            company=company, title=clean(j["title"]), locations=locs,
+            location=locs[0] if locs else "",
             posted=(j.get("first_published") or j.get("updated_at") or "")[:10],
             req_id=j.get("requisition_id") or str(j.get("id", "")),
-            url=j.get("absolute_url", ""), source=f"greenhouse:{cfg['token']}")
+            url=j.get("absolute_url", ""), source=f"greenhouse:{cfg['token']}",
+            deadline=(j.get("application_deadline") or "")[:10])
         if details and j.get("content"):
             apply_detail_text(p, html_to_text(htmllib.unescape(j["content"])))
+        out.append(p)
+    return out
+
+
+# --------------------------------------------------------------------------------------
+# Ashby (public posting API, the same one the company's own careers page calls)
+# --------------------------------------------------------------------------------------
+def scrape_ashby(client: PoliteClient, company: str, cfg: dict, details: bool) -> list[Posting]:
+    r = client.get(f"https://api.ashbyhq.com/posting-api/job-board/{cfg['org']}",
+                   params={"includeCompensation": "true"}, headers={"Accept": "application/json"})
+    r.raise_for_status()
+    out = []
+    for j in r.json().get("jobs", []):
+        title = clean(j.get("title"))
+        if not (is_internship(title) or (j.get("employmentType") == "Intern" and not NOT_INTERN_RE.search(title))):
+            continue
+        if j.get("isListed") is False:
+            continue
+        locs = [clean(x) for x in [j.get("location"), *[(l or {}).get("location") for l in j.get("secondaryLocations") or []]] if clean(x)]
+        wp = (j.get("workplaceType") or "").lower()
+        p = Posting(company=company, title=title, location=locs[0] if locs else "", locations=locs,
+                    posted=(j.get("publishedAt") or "")[:10], url=j.get("jobUrl") or "", source=f"ashby:{cfg['org']}",
+                    pay=clean(((j.get("compensation") or {}).get("compensationTierSummary")) or ""),
+                    extra={"remoteType": "Hybrid" if wp == "hybrid" else "Remote" if wp == "remote" or j.get("isRemote") else ""})
+        if details and j.get("descriptionHtml"):
+            apply_detail_text(p, html_to_text(j["descriptionHtml"]))
         out.append(p)
     return out
 
@@ -668,12 +830,32 @@ def enrich_from_page(client: PoliteClient, p: Posting, selectors: tuple[str, ...
                 body = str(el)
                 break
     p.pay = jsonld_pay(jp)
+    def meta(prop: str) -> str:
+        el = page.find("meta", attrs={"itemprop": prop})
+        return el.get("content", "") if el else ""
+    valid = sane_deadline(jp.get("validThrough") or "") or sane_deadline(any_date(meta("validThrough")))
+    if valid:
+        p.deadline = valid
+    posted = str(jp.get("datePosted") or "")[:10] or any_date(meta("datePosted"))   # SuccessFactors: microdata only
+    if posted:
+        p.posted = posted
+    ident = jp.get("identifier")
+    ident = ident.get("value") if isinstance(ident, dict) else ident
+    if not p.req_id and isinstance(ident, str) and re.fullmatch(r"[A-Z]{0,5}-?\d{4,}(?:-\d+)?", ident.strip()):
+        p.req_id = ident.strip()   # Radancy: {"name": "Job ID", "value": "R-254668"}; AbbVie's is a GUID, skipped
     apply_detail_text(p, html_to_text(body))
-    if jp.get("validThrough"):
-        p.deadline = str(jp["validThrough"])[:10]
-    if jp.get("datePosted"):
-        p.posted = str(jp["datePosted"])[:10]
     return page
+
+
+def any_date(text: str) -> str:
+    """'2026-09-17T…' / 'Thu Sep 17 00:00:00 UTC 2026' / 'Sep 17, 2026' -> '2026-09-17' ('' if none)."""
+    t = clean(text)
+    if re.match(r"\d{4}-\d{2}-\d{2}", t):
+        return t[:10]
+    m = re.search(r"\b([A-Za-z]{3})[a-z]*\.?\s+(\d{1,2})\b.*?\b(20\d\d)\b", t)
+    if m and m.group(1).lower() in [n[:3] for n in _MONTH_NAMES]:
+        return f"{m.group(3)}-{[n[:3] for n in _MONTH_NAMES].index(m.group(1).lower()) + 1:02d}-{int(m.group(2)):02d}"
+    return ""
 
 
 # --------------------------------------------------------------------------------------
@@ -729,7 +911,250 @@ def scrape_abbvie_sitemap(client: PoliteClient, company: str, cfg: dict, details
     return out
 
 
+# --------------------------------------------------------------------------------------
+# Phenom career sites (careers.gene.com): the search and job pages embed their data as
+# `phApp.ddo = {...}`. robots.txt allows /search-results and /job/ pages (it blocks /apply etc.).
+# --------------------------------------------------------------------------------------
+PHENOM_PAGE = 10
+
+
+def parse_phenom_ddo(html: str) -> dict:
+    """The JSON object assigned to phApp.ddo in a Phenom page."""
+    i = html.find("phApp.ddo = ")
+    if i < 0:
+        return {}
+    start = i + len("phApp.ddo = ")
+    depth, in_str, esc = 0, False, False
+    for j in range(start, len(html)):
+        ch = html[j]
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                try:
+                    return json.loads(html[start:j + 1])
+                except ValueError:
+                    return {}
+    return {}
+
+
+def _phenom_locations(job: dict) -> list[str]:
+    locs = []
+    for l in job.get("multi_location") or []:
+        locs.append(l.get("location") if isinstance(l, dict) else l)
+    return [clean(x) for x in locs if x] or ([clean(job["location"])] if job.get("location") else [])
+
+
+def scrape_phenom(client: PoliteClient, company: str, cfg: dict, details: bool, max_pages: int = 20) -> list[Posting]:
+    base, path = cfg["base"].rstrip("/"), cfg.get("path", "/us/en")
+    out: dict[str, Posting] = {}
+    for term in cfg.get("terms", ["intern"]):
+        for page in range(max_pages):
+            r = client.get(f"{base}{path}/search-results?" + urlencode({"keywords": term, "from": page * PHENOM_PAGE, "s": 1}),
+                           headers={"Accept": "text/html"})
+            r.raise_for_status()
+            found = (parse_phenom_ddo(r.text).get("eagerLoadRefineSearch") or {})
+            jobs = ((found.get("data") or {}).get("jobs")) or []
+            for j in jobs:
+                title, url = clean(j.get("title")), j.get("jobUrl") or ""
+                if not url or url in out or not is_internship(title):
+                    continue
+                locs = _phenom_locations(j)
+                out[url] = Posting(company=company, title=title, location=locs[0] if locs else "", locations=locs,
+                                   posted=(j.get("postedDate") or j.get("dateCreated") or "")[:10],
+                                   req_id=j.get("reqId") or j.get("jobId") or "", url=url, source=f"phenom:{base}")
+            total = found.get("totalHits") or 0
+            if not jobs or (page + 1) * PHENOM_PAGE >= total:
+                break
+    if details:
+        for p in out.values():
+            try:
+                job = ((parse_phenom_ddo(client.get(p.url, headers={"Accept": "text/html"}).text).get("jobDetail") or {})
+                       .get("data") or {}).get("job") or {}
+                if job.get("description"):
+                    apply_detail_text(p, html_to_text(job["description"]))
+                p.locations = _phenom_locations(job) or p.locations
+            except requests.RequestException as e:
+                log.debug("phenom detail %s: %s", p.url, e)
+    return list(out.values())
+
+
+# --------------------------------------------------------------------------------------
+# AbbVie job search (Attrax): /en/jobs?q=intern&page=N, 10 tiles per page.
+# Used by default; skipped with --respect-robots, because robots.txt disallows /jobs?*.
+# --------------------------------------------------------------------------------------
+ABBVIE_PAGE = 10
+
+
+def parse_abbvie_search(html: str, base: str) -> tuple[list[dict], int | None]:
+    soup = BeautifulSoup(html, "lxml")
+    m = re.search(r"([\d,]+)\s*result", (soup.select_one(".attrax-pagination__total-results") or soup).get_text(" "), re.I)
+    total = int(m.group(1).replace(",", "")) if m else None
+
+    def val(tile, cls: str) -> str:
+        el = tile.select_one(f".{cls} .attrax-vacancy-tile__item-value") or tile.select_one(f".{cls}")
+        if el is None:
+            return ""
+        txt = clean(el.get_text(" "))
+        label = tile.select_one(f".{cls} .attrax-vacancy-tile__item-label")
+        if label is not None and el is not label and txt.startswith(clean(label.get_text(" "))):
+            txt = clean(txt[len(clean(label.get_text(" "))):])
+        return re.sub(r"^(Job ID|Expiry Date|Salary|Location)\s*", "", txt, flags=re.I)
+
+    rows = []
+    for t in soup.select(".attrax-vacancy-tile"):
+        a = t.select_one("a.attrax-vacancy-tile__title")
+        if a is None or not a.get("href"):
+            continue
+        pay = val(t, "attrax-vacancy-tile__salary-value") or val(t, "attrax-vacancy-tile__salary")
+        expiry = val(t, "attrax-vacancy-tile__expiry")
+        deadline = ""
+        em = re.match(r"(\d{1,2})/(\d{1,2})/(\d{4})", expiry)
+        if em and int(em.group(3)) > 2000:
+            deadline = f"{em.group(3)}-{int(em.group(1)):02d}-{int(em.group(2)):02d}"  # /en/ pages use MM/DD/YYYY
+        rows.append({
+            "title": clean(a.get_text(" ")),
+            "url": urljoin(base, a["href"]),
+            "location": val(t, "attrax-vacancy-tile__location-freetext"),
+            "pay": "" if re.fullmatch(r"\$?0(\.0+)?\s*-\s*\$?0(\.0+)?", pay or "") else pay,
+            "mode": val(t, "attrax-vacancy-tile__option-work-location-type"),
+            "job_type": val(t, "attrax-vacancy-tile__option-job-type"),
+            "req_id": val(t, "attrax-vacancy-tile__externalreference"),
+            "deadline": deadline,
+        })
+    return rows, total
+
+
+def scrape_abbvie_search(client: PoliteClient, company: str, cfg: dict, details: bool, max_pages: int = 30) -> list[Posting]:
+    base, path = cfg["base"].rstrip("/"), cfg.get("path", "/en/jobs")
+    out: dict[str, Posting] = {}
+    for term in cfg.get("terms", ["intern"]):
+        for page in range(1, max_pages + 1):
+            r = client.get(f"{base}{path}?" + urlencode({"q": term, "page": page}), headers={"Accept": "text/html"})
+            r.raise_for_status()
+            rows, total = parse_abbvie_search(r.text, base)
+            for row in rows:
+                if row["url"] in out or not (is_internship(row["title"]) or re.search(r"intern", row["job_type"], re.I)):
+                    continue
+                mode = row["mode"].lower()
+                out[row["url"]] = Posting(
+                    company=company, title=row["title"], location=row["location"], locations=[row["location"]] if row["location"] else [],
+                    req_id=row["req_id"], url=row["url"], source="abbvie-search", pay=row["pay"], deadline=row["deadline"],
+                    extra={"remoteType": "Hybrid" if "hybrid" in mode else "Remote" if "remote" in mode else ""})
+            if not rows or (total is not None and page * ABBVIE_PAGE >= total):
+                break
+    if details:
+        for p in out.values():
+            pay, deadline = p.pay, p.deadline
+            enrich_from_page(client, p, ("[itemprop=description]", ".job-description", ".vacancy-description", "article"))
+            p.pay, p.deadline = p.pay or pay, p.deadline or deadline
+    return list(out.values())
+
+
+# --------------------------------------------------------------------------------------
+# Radancy / TalentBrew career sites (careers.amgen.com): /en/search-jobs/<term>?p=N.
+# The first page says how many jobs match the term (data-total-job-results); pages past
+# that drift into unrelated jobs, so paging stops there.
+# --------------------------------------------------------------------------------------
+_MONTHS = {m: i for i, m in enumerate(["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"], 1)}
+
+
+def radancy_date(text: str) -> str:
+    """'Aug. 31, 2026' / 'August 31, 2026' / '08/31/2026' -> '2026-08-31' ('' if unreadable)."""
+    t = clean(text)
+    m = re.search(r"([A-Za-z]{3})[a-z]*\.?\s+(\d{1,2}),?\s+(\d{4})", t)
+    if m and m.group(1).lower() in _MONTHS:
+        return f"{m.group(3)}-{_MONTHS[m.group(1).lower()]:02d}-{int(m.group(2)):02d}"
+    m = re.search(r"(\d{1,2})/(\d{1,2})/(\d{4})", t)
+    return f"{m.group(3)}-{int(m.group(1)):02d}-{int(m.group(2)):02d}" if m else ""
+
+
+def _radancy_locations(text: str) -> list[str]:
+    """'US - California - Thousand Oaks / and 3 other locations' -> ['US - California - Thousand Oaks']."""
+    t = re.sub(r"(/\s*)?\band \d+ other locations?\b.*$", "", clean(text), flags=re.I).strip(" /")
+    return [x.strip() for x in re.split(r"\s*/\s*|\s*;\s*", t) if x.strip()]
+
+
+def parse_radancy_search(html: str, base: str) -> tuple[list[dict], dict]:
+    soup = BeautifulSoup(html, "lxml")
+    sec = soup.select_one("section#search-results") or soup.select_one("[data-total-job-results]")
+
+    def num(attr: str) -> int | None:
+        v = sec.get(attr) if sec is not None else None
+        return int(v) if v and str(v).isdigit() else None
+
+    meta = {"total": num("data-total-job-results"), "pages": num("data-total-pages"), "per_page": num("data-records-per-page")}
+    rows = []
+    for a in soup.select("#search-results-list li a[href*='/job/']"):
+        h = a.select_one("h2, h3")
+        locs: list[str] = []
+        for el in a.select(".job-location"):
+            locs += [l for l in _radancy_locations(el.get_text(" ")) if l not in locs]
+        rid = a.select_one(".job-id, .job-reqid")
+        posted = a.select_one(".job-date-posted")
+        rows.append({
+            "title": clean((h or a).get_text(" ")),
+            "url": urljoin(base, a["href"]),
+            "locations": locs,
+            "posted": radancy_date(posted.get_text(" ")) if posted else "",
+            "req_id": re.sub(r"^(Job\s*ID|Req(uisition)?\s*(ID|#)?)\s*:?\s*", "", clean(rid.get_text(" ")), flags=re.I) if rid else "",
+        })
+    return rows, meta
+
+
+REQ_ID_RE = re.compile(r"\b(?:Job|Req(?:uisition)?)\s*(?:ID|#|Number)\s*:?\s*([A-Z]{1,4}-?\d{4,})", re.I)
+
+
+def scrape_radancy(client: PoliteClient, company: str, cfg: dict, details: bool, max_pages: int = 20) -> list[Posting]:
+    base, path = cfg["base"].rstrip("/"), cfg.get("path", "/en/search-jobs")
+    out: dict[str, Posting] = {}
+    for term in cfg.get("terms", ["intern"]):
+        last = max_pages
+        for page in range(1, max_pages + 1):
+            r = client.get(f"{base}{path}/{term}" + (f"?p={page}" if page > 1 else ""), headers={"Accept": "text/html"})
+            r.raise_for_status()
+            rows, meta = parse_radancy_search(r.text, base)
+            if page == 1 and meta["total"] is not None:
+                per = meta["per_page"] or len(rows) or 1
+                last = min(max_pages, max(1, -(-meta["total"] // per)))
+            for row in rows:
+                if row["url"] in out or not is_internship(row["title"]):
+                    continue
+                locs = row["locations"]
+                out[row["url"]] = Posting(company=company, title=row["title"], location=locs[0] if locs else "",
+                                          locations=locs, posted=row["posted"], req_id=row["req_id"], url=row["url"],
+                                          source=f"radancy:{base}")
+            if not rows or page >= last:
+                break
+    if details:
+        for p in out.values():
+            posted = p.posted
+            page = enrich_from_page(client, p, (".ats-description", ".job-description", "#anchor-overview",
+                                                "[itemprop=description]", "main"))
+            p.posted = p.posted or posted
+            if page is not None and not p.req_id:
+                m = REQ_ID_RE.search(page.get_text(" "))
+                if m:
+                    p.req_id = m.group(1).upper()
+    return list(out.values())
+
+
 SCRAPERS = {
+    "abbvie_search": scrape_abbvie_search,
+    "phenom": scrape_phenom,
+    "radancy": scrape_radancy,
+    "ashby": scrape_ashby,
     "workday": scrape_workday,
     "greenhouse": scrape_greenhouse,
     "successfactors": scrape_successfactors,
@@ -740,25 +1165,38 @@ US_RE = re.compile(r"\b(United States|USA|U\.S\.|US\b|Remote \(United States\))|
                    r"HI|I[ADLN]|K[SY]|LA|M[ADEINOST]|N[CDEHJMVY]|O[HKR]|P[AR]|RI|S[CD]|T[NX]|UT|V[AT]|W[AIVY])\b")
 
 
+def is_us(p: Posting) -> bool:
+    """In the US: the site says so (Workday country), a location names a US place, or (without
+    --details) a "3 Locations" listing that can't be judged yet."""
+    country = (p.extra.get("country") or "") if isinstance(p.extra, dict) else ""
+    if country:
+        return bool(re.search(r"united states|^usa?$", country, re.I))
+    locs = " | ".join([p.location, *p.locations])
+    return bool(US_RE.search(locs)) or bool(re.fullmatch(r"\d+ Locations?", clean(p.location)) and not p.locations)
+
+
 def first_url(cfg: dict) -> str:
     if cfg["platform"] == "workday":
-        t, h, s = cfg["boards"][0]
+        t, h, s = cfg["boards"][0][:3]
         return workday_urls(t, h, s)[0]
+    if cfg["platform"] == "ashby":
+        return f"https://jobs.ashbyhq.com/{cfg['org']}"
     return cfg.get("base") or cfg.get("sitemap") or f"https://boards.greenhouse.io/{cfg.get('token')}"
 
 
 def cluster(cfg: dict) -> str:
     """Companies on the same Workday data centre share infrastructure (and probably rate limits)."""
-    return cfg["boards"][0][1] if cfg["platform"] == "workday" else cfg["platform"] + ":" + cfg.get("token", cfg.get("base", ""))
+    return cfg["boards"][0][1] if cfg["platform"] == "workday" else cfg["platform"] + ":" + cfg.get("token", cfg.get("org", cfg.get("base", "")))
 
 
 CLUSTER_CAP = 2  # at most this many companies at once on one Workday data centre
 
 
 def run(companies: list[str], details: bool, us_only: bool, client: PoliteClient,
-        workers: int = 1) -> tuple[list[Posting], dict]:
+        workers: int = 1, ignore_robots: bool = False) -> tuple[list[Posting], dict]:
     """Scrape each company. With workers > 1, companies run side by side, each with its own
-    client, so every site still sees only one request at a time at the polite pace."""
+    client, so every site still sees only one request at a time at the polite pace.
+    With ignore_robots, a company's `robots_disallowed` route (if any) is tried first."""
     status: dict[str, str] = {}
     caps: dict[str, threading.Semaphore] = {}
     lock = threading.Lock()
@@ -770,19 +1208,32 @@ def run(companies: list[str], details: bool, us_only: bool, client: PoliteClient
         with cap:
             c = client if workers <= 1 else client.clone()
             log.info("== %s (%s)", name, cfg["platform"])
-            try:
-                found = SCRAPERS[cfg["platform"]](c, name, cfg, details)
-                if us_only:
-                    found = [p for p in found if US_RE.search(" | ".join([p.location, *p.locations]))]
-                status[name] = f"ok ({len(found)})"
-                log.info("   %s: %d internship postings", name, len(found))
-                return found
-            except BlockedError as e:
-                status[name] = "BLOCKED - manual step needed"
-                log.error("   %s: %s", name, e)
-            except Exception as e:  # keep going with the other companies
-                status[name] = f"error: {e}"
-                log.exception("   %s failed", name)
+            attempts = [(cfg, "")] + ([({**cfg["fallback"], "id": cfg.get("id")}, " via " + cfg["fallback"]["platform"])]
+                                      if cfg.get("fallback") else [])
+            if ignore_robots and cfg.get("robots_disallowed"):
+                rd = cfg["robots_disallowed"]
+                attempts.insert(0, ({**rd, "id": cfg.get("id")}, " via " + rd["platform"] + " (robots.txt ignored)"))
+            problems = []
+            for acfg, via in attempts:
+                try:
+                    found = SCRAPERS[acfg["platform"]](c, name, acfg, details)
+                    if us_only:
+                        found = [p for p in found if is_us(p)]
+                    status[name] = f"ok ({len(found)}){via}"
+                    log.info("   %s: %d internship postings%s", name, len(found), via)
+                    return found
+                except UnavailableError as e:
+                    problems.append("UNAVAILABLE - down for maintenance, try later")
+                    log.warning("   %s: %s", name, e)
+                except BlockedError as e:
+                    problems.append("BLOCKED - manual step needed")
+                    log.error("   %s: %s", name, e)
+                except Exception as e:  # keep going with the other companies
+                    problems.append(f"error: {e}")
+                    log.exception("   %s failed", name)
+                if acfg is not attempts[-1][0]:
+                    log.warning("   %s: trying the next source", name)
+            status[name] = problems[0] if problems else "error"
             return []
 
     results: list[Posting] = []
@@ -853,11 +1304,98 @@ def guess_mode(p: Posting) -> str:
     return "Onsite"
 
 
+# Headings that start the part of a posting about the job itself.
+ROLE_HEAD = re.compile(
+    r"^(?:the\s+|your\s+|about\s+the\s+|position\s+|role\s+|job\s+|internship\s+|program\s+)?"
+    r"(?:job description|description|role|position|opportunity|job|internship|summary|overview|overview of (?:the )?role|"
+    r"role overview|position summary|job summary|about the role|what you(?:'|’)ll do|what you will do|in this role|"
+    r"department summary|team overview|the team|project description)\s*:?$", re.I)
+# Headings of sections about the company, benefits or legal text: skipped until the next role heading.
+COMPANY_HEAD = re.compile(
+    r"^(?:about (?:us|the company|[A-Z][\w&.’' -]{1,40})|who we are|company (?:overview|description)|our (?:company|mission|story|culture)|"
+    r"why (?:join|work)|join [A-Z][\w’']+(?:’s|'s)? mission|life at|our commitment|equal opportunity|eeo|benefits|"
+    r"what we offer|what you can expect of us|compensation|pay range|salary|additional information|#)", re.I)
+ROLE_WORDS = re.compile(r"\b(intern(?:ship)?s?|co-?op|you will|you['’]ll|this (?:role|position|internship|project)|the (?:intern|candidate|student)|"
+                        r"responsib|project)\b", re.I)
+SLOGAN = re.compile(r"^(?:let['’]s (?:do this|change the world)|join us|apply (?:now|today)|are you ready|ready to make)[.!]?$", re.I)
+WE_WORDS = re.compile(r"\b(we|we['’]re|we['’]ve|our|us)\b", re.I)
+
+
+def _company_words(company: str) -> list[str]:
+    name = company or ""
+    words = [w for w in re.split(r"[\s:,]+", name) if len(w) > 2 and w.lower() not in ("the", "and", "inc", "sciences", "pharmaceuticals", "therapeutics")]
+    extra = {"Genentech": ["Roche"], "Merck": ["MSD"], "Bristol Myers Squibb": ["BMS"], "Eli Lilly": ["Lilly"]}.get(name, [])
+    return words + extra
+
+
+def is_company_blurb(par: str, company: str) -> bool:
+    """'At Gilead, we're creating a healthier world...' - about the company, not the job."""
+    if ROLE_WORDS.search(par):
+        return False
+    names = _company_words(company)
+    mentions = any(re.search(rf"\b{re.escape(w)}\b", par, re.I) for w in names)
+    return mentions or bool(re.search(
+        r"for (?:more than|over) \d+ years|our mission|we['’]re (?:creating|committed|on a mission)|patients (?:around|across) the (?:world|globe)|"
+        r"equal (?:employment )?opportunity|committed to (?:diversity|an inclusive)", par, re.I))
+
+
+def job_summary(text: str, company: str = "", title: str = "", n: int = 3, max_len: int = 600) -> str:
+    """The opening of the job description itself: skips company blurbs, benefits and legal text, and
+    starts after a heading like "Job Description" or "The Opportunity" when there is one."""
+    lines = [l.strip() for l in (text or "").splitlines() if l.strip()]
+    def is_head(l: str) -> bool:
+        return len(l) < 70 and not l.startswith("•") and not re.search(r"[.!?]$", l)
+    paras, skipping = [], False
+    for l in lines:
+        if is_head(l):
+            bare = l.rstrip(":").strip()
+            if COMPANY_HEAD.search(bare):
+                skipping = True
+            elif ROLE_HEAD.search(bare) or SECTION_HEADS["resp"].search(bare):
+                skipping = False
+            continue
+        if skipping or l.startswith("•") or (title and l.strip().lower() == title.strip().lower()):
+            continue
+        if is_company_blurb(l, company):
+            continue
+        paras.append(l)
+        if sum(len(x) for x in paras) > max_len * 1.5:
+            break
+    body = " ".join(paras)
+    if not body:   # nothing but bullets: use the first few
+        bullets = [l.lstrip("• ").strip() for l in lines if l.startswith("•")][:3]
+        body = " ".join(b if re.search(r"[.!?]$", b) else b + "." for b in bullets)
+    parts = [x for x in re.split(r"(?<=[.!?])\s+", body.strip()) if x and not SLOGAN.match(x) and not is_company_blurb(x, company)]
+    out = ""
+    for part in parts[:n]:
+        if out and len(out) + len(part) + 1 > max_len:
+            break
+        out = (out + " " + part).strip()
+    return out[:max_len]
+
+
 def first_sentences(text: str, n: int = 2, max_len: int = 400) -> str:
     body = " ".join(l for l in text.splitlines() if l and not l.startswith("•"))
     parts = re.split(r"(?<=[.!?])\s+", body)
     out = " ".join(parts[:n]).strip()
     return out[:max_len]
+
+
+def us_locations(p: Posting) -> list[str]:
+    """Normalized locations. For US jobs listed by city alone ("SLEEPY HOLLOW", "Warren"), the state
+    comes from the description ("Location: Warren, NJ") or the table of known US sites."""
+    country = (p.extra.get("country") or "") if isinstance(p.extra, dict) else ""
+    us = bool(re.search(r"united states", country, re.I))
+    out = []
+    for raw in p.locations or [p.location]:
+        loc = normalize_location(raw, us)
+        if us and "," not in loc and loc and not re.search(r"remote|\d+ locations?", loc, re.I):
+            m = re.search(rf"\b({re.escape(loc)}),?\s+([A-Z]{{2}})\b", p.description or "", re.I)
+            if m and m.group(2).upper() in _CODES:
+                loc = f"{_city(raw.strip()) if raw.strip().isupper() else m.group(1)}, {m.group(2).upper()}"
+        if loc and loc not in out:
+            out.append(loc)
+    return out
 
 
 def to_import_record(p: Posting) -> dict:
@@ -868,7 +1406,7 @@ def to_import_record(p: Posting) -> dict:
         "key": posting_key(p),
         "title": p.title,
         "company": COMPANIES.get(p.company, {}).get("id", p.company),
-        "locations": [x for x in dict.fromkeys(normalize_location(l) for l in (p.locations or [p.location])) if x],
+        "locations": us_locations(p),
         "category": guess_category(p.title, p.description),
         "deadline": p.deadline,
         "first_seen": posted_to_date(p.posted) or date.today().isoformat(),
@@ -877,7 +1415,7 @@ def to_import_record(p: Posting) -> dict:
         "pay": p.pay,
         "url": p.url,
         "req_id": p.req_id,
-        "description": first_sentences(p.description),
+        "description": job_summary(p.description, p.company, p.title),
         "responsibilities": sec["resp"],
         "qualifications": sec["quals"],
     }
@@ -895,6 +1433,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--details", action="store_true", help="fetch each posting's detail record (slower)")
     ap.add_argument("--us-only", action="store_true", help="keep US / US-remote locations only")
     ap.add_argument("--out", default="internships", help="output file stem (writes .csv and .json)")
+    ap.add_argument("--respect-robots", action="store_true",
+                    help="only use routes each site's robots.txt allows (by default the script also uses "
+                         "disallowed ones, today AbbVie's job search)")
     ap.add_argument("--workers", type=int, default=1,
                     help="companies to scrape at the same time (each site still gets one request at a time); try 5")
     ap.add_argument("--import-out", metavar="PATH",
@@ -921,7 +1462,11 @@ def main(argv: list[str] | None = None) -> int:
     for name in args.manual_session or []:
         client.import_browser_cookies(first_url(COMPANIES[match(name)]))
 
-    postings, status = run(companies, args.details, args.us_only, client, workers=max(1, args.workers))
+    ignore_robots = not args.respect_robots
+    if ignore_robots:
+        log.info("Ignoring robots.txt (default); pass --respect-robots to follow it")
+    postings, status = run(companies, args.details, args.us_only, client, workers=max(1, args.workers),
+                           ignore_robots=ignore_robots)
     postings.sort(key=lambda p: (p.company, p.title))
     write_outputs(postings, args.out)
     if args.import_out:
@@ -931,7 +1476,7 @@ def main(argv: list[str] | None = None) -> int:
     for name, s in status.items():
         print(f"  {name:<24} {s}")
     print(f"\n{len(postings)} postings -> {args.out}.csv / {args.out}.json")
-    return 0 if not any(s.startswith(("BLOCKED", "error")) for s in status.values()) else 2
+    return 0 if not any(s.startswith(("BLOCKED", "UNAVAILABLE", "error")) for s in status.values()) else 2
 
 
 if __name__ == "__main__":

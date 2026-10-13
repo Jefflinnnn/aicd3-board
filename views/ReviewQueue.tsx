@@ -18,11 +18,13 @@ const SOURCE: Record<StagedJob["review"]["source"], string> = {
   import: "Flagged by import checks",
   held: "Held by staff",
   pulled: "Pulled from the job board",
+  check: "Couldn't confirm it's still open",
 }
 
 /**
  * Postings that need a person to look at them before students can see them: imports the checks
- * flagged as vague or off-target, postings staff chose to hold, and ones pulled back off the board.
+ * flagged as vague or off-target, postings staff chose to hold, ones pulled back off the board, and
+ * ones the daily open/closed check couldn't confirm (Approve puts them back; Reject keeps them off).
  */
 export function ReviewQueue({ onEdit, flash }: { onEdit: (s: StagedJob) => void; flash: boolean }) {
   const { staged, approve, pullToReview, saveStaged, setReviewStatus, dropStaged } = useApp()
