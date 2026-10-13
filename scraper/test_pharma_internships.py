@@ -563,6 +563,10 @@ class LiveFormats(unittest.TestCase):
                  "US: South San Francisco": "South San Francisco, CA",   # Lilly
                  "USA - Pennsylvania - West Point": "West Point, PA",    # Merck
                  "Ridgefield, CT, United States, Connecticut": "Ridgefield, CT",  # Boehringer
+                 "US, CA, Santa Clara": "Santa Clara, CA",               # NVIDIA
+                 "US, WA, Redmond": "Redmond, WA",                       # NVIDIA
+                 "Washington, DC": "Washington, DC",                     # state name first, but a state code second
+                 "China, Shanghai": "China, Shanghai",                   # not the US: unchanged
                  "Cambridge": "Cambridge"}                               # could be anywhere without a country
         for raw, want in cases.items():
             self.assertEqual(pi.normalize_location(raw), want, raw)
@@ -659,6 +663,40 @@ class NewCompanies(unittest.TestCase):
         self.assertTrue(req.search("Research Intern\nModels for drug discovery and protein design"))
         self.assertTrue(req.search("Healthcare AI Intern"))
         self.assertFalse(req.search("ASIC Verification Intern\nWrite testbenches for GPU memory controllers"))
+
+    def test_lilly_tries_chrome_handshake_then_browser_then_phenom(self):
+        cfg = pi.COMPANIES["Eli Lilly"]
+        self.assertTrue(cfg["impersonate"])
+        self.assertEqual([f["platform"] for f in cfg["fallback"]], ["workday_browser", "phenom"])
+        self.assertIn(("lilly", "wd115", "CMP"), cfg["fallback"][0]["boards"])   # the US internships are on CMP
+
+    def test_fallback_chain_moves_on_when_a_source_is_blocked(self):
+        calls = []
+        def blocked(client, company, cfg, details):
+            calls.append(cfg["platform"]); raise pi.BlockedError("cf challenge")
+        def browser(client, company, cfg, details):
+            calls.append(cfg["platform"])
+            return [pi.Posting(company=company, title="AI PhD ML Engineering Intern", location="US, Indianapolis IN",
+                               url="https://lilly.wd115.myworkdayjobs.com/CMP/job/x_R-1")]
+        saved = dict(pi.SCRAPERS)
+        try:
+            pi.SCRAPERS.update(workday=blocked, workday_browser=browser, phenom=blocked)
+            got, status = pi.run(["Eli Lilly"], details=False, us_only=True, client=pi.PoliteClient(0, 0))
+        finally:
+            pi.SCRAPERS.clear(); pi.SCRAPERS.update(saved)
+        self.assertEqual(calls, ["workday", "workday_browser"])   # Phenom not needed once the browser route worked
+        self.assertEqual([p.title for p in got], ["AI PhD ML Engineering Intern"])
+        self.assertIn("via headless browser", status["Eli Lilly"])
+
+    def test_impersonated_responses_look_like_requests(self):
+        class Fake:
+            status_code, content, url, reason = 403, b"<html>cf-chl challenge</html>", "https://x.test/a", "Forbidden"
+            headers = {"Content-Type": "text/html", "Server": "cloudflare"}
+        r = pi.ImpersonatingClient._to_requests("GET", Fake())
+        self.assertIsInstance(r, requests.Response)
+        self.assertEqual((r.status_code, r.request.method, r.headers["server"]), (403, "GET", "cloudflare"))
+        with self.assertRaises(pi.BlockedError):
+            pi.PoliteClient._check_block(r)
 
     def test_talent_pool_postings_are_not_internships(self):
         self.assertFalse(pi.is_internship("Interested in an internship?"))   # Recursion's standing post

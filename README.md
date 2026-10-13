@@ -134,6 +134,8 @@ On Bedrock, pin the model so the subagents use it too (they inherit it):
 CLAUDE_CODE_USE_BEDROCK=1 AWS_REGION=us-east-1 claude --model us.anthropic.claude-sonnet-5
 ```
 
+**Sites behind bot checks (Eli Lilly).** Lilly's Workday (`lilly.wd115…`) sits behind Cloudflare, which refuses Python's own way of connecting even though a real browser gets straight through, and all of Lilly's US internships are on its campus board (CMP). The scraper tries three routes in order and the run log says which one worked: Chrome's connection fingerprint via `curl_cffi` (in `requirements.txt`), then the same boards through headless Chromium (`pip install playwright && playwright install chromium`; the GitHub refresh installs it), then careers.lilly.com, which only mirrors the main LLY board. Re-checking open Lilly postings uses the Chrome fingerprint too. Mark another company the same way with `"impersonate": True` in `COMPANIES`.
+
 By default the scraper also uses routes robots.txt disallows: today that's AbbVie's job search, which has real titles, locations, pay, work type, R-numbers and expiry dates. Pass `--respect-robots` to use allowed routes only (the AbbVie sitemap instead), which still covers every company. The pace is the same either way (one request at a time per site, 1.5–3 s apart) and it still stops at bot checks. Check the sites' terms of use. When Workday is down (weekend maintenance), Genentech falls back to careers.gene.com automatically.
 
 The scraper can also run on its own: `pip install -r scraper/requirements.txt`, then `python3 scraper/pharma_internships.py --help`. Its tests are `cd scraper && python3 -m unittest test_pharma_internships test_extract test_check_open`.
