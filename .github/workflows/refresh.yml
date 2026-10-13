@@ -6,8 +6,9 @@
 #   AICD3_URL           the live site, e.g. https://your-app.vercel.app (no trailing slash)
 #   AICD3_INGEST_TOKEN  the same value as SCRAPER_INGEST_TOKEN in Vercel's environment variables
 # Optional, to classify with Claude instead of keyword rules (the same values as in .env.local):
-#   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION, ANTHROPIC_BEDROCK_BASE_URL, ANTHROPIC_DEFAULT_HAIKU_MODEL
-#   (or ANTHROPIC_API_KEY). If the gateway can't be reached from GitHub, the run falls back to keyword rules.
+#   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION, ANTHROPIC_BEDROCK_BASE_URL, ANTHROPIC_DEFAULT_SONNET_MODEL
+#   (or ANTHROPIC_API_KEY). UCSF's gateway only answers on the UCSF network/VPN, which GitHub's machines aren't on,
+#   so with UCSF's gateway these runs use keyword rules (the log says so); an Anthropic API key works from here.
 # Run it by hand any time from the Actions tab → "Job data refresh" → Run workflow.
 name: Job data refresh
 
@@ -40,7 +41,7 @@ jobs:
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
       AWS_REGION: ${{ secrets.AWS_REGION }}
       ANTHROPIC_BEDROCK_BASE_URL: ${{ secrets.ANTHROPIC_BEDROCK_BASE_URL }}
-      ANTHROPIC_DEFAULT_HAIKU_MODEL: ${{ secrets.ANTHROPIC_DEFAULT_HAIKU_MODEL }}
+      ANTHROPIC_DEFAULT_SONNET_MODEL: ${{ secrets.ANTHROPIC_DEFAULT_SONNET_MODEL }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
     steps:
       - name: Check the secrets are set

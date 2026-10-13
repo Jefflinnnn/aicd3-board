@@ -128,7 +128,7 @@ export function Refresh() {
           <Cpu className="size-4 text-muted-foreground" aria-hidden />
           <span>
             Classifier: <b className="font-medium">{st.classifier.llm ? "Claude" : st.classifier.d3 ? "d3-flash" : "keyword rules"}</b>
-            {st.classifier.llm && <span className="text-muted-foreground"> ({st.classifier.llm}; keyword rules if it can’t be reached)</span>}
+            {st.classifier.llm && <span className="text-muted-foreground"> ({st.classifier.llm}; needs the UCSF VPN, keyword rules otherwise)</span>}
             {!st.classifier.llm && st.classifier.d3 && st.classifier.revision && <span className="text-muted-foreground"> (version {st.classifier.revision.slice(0, 7)})</span>}
           </span>
           {!st.classifier.llm && !st.classifier.d3 && !st.classifier.canSetup && (
@@ -206,6 +206,7 @@ function RunRow({ run, detailed = false }: { run: RefreshRun; detailed?: boolean
         <p className="mt-1 text-xs text-warn">Couldn&apos;t scrape: {s.failed.map((n) => `${n} (${s.companies[n]})`).join("; ")}</p>
       ) : null}
       {reason && <p className="mt-1 text-xs text-warn"><AlertTriangle className="mr-1 inline size-3" />{reason}</p>}
+      {detailed && s?.classifierNote && <p className="mt-1 text-xs text-warn"><AlertTriangle className="mr-1 inline size-3" />Claude wasn’t used for this run, so keyword rules classified it: {s.classifierNote}</p>}
       {s?.checkError && <p className="mt-1 text-xs text-warn">Re-checking open postings stopped early ({s.checkError}); the import was still saved.</p>}
       {run.status !== "running" && run.log && (
         <details className="mt-1 text-xs" open={detailed && run.status === "failed"}>

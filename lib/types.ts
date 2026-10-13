@@ -75,6 +75,8 @@ export interface RefreshRun {
     database: { added: number; staged: number; updated: number; closed: number; unchanged: number; rejected: number; dropped?: number; unlisted?: number }
     errors: number
     checked: { open: number; closed: number; unknown: number } | null
+    /** why Claude wasn't used for this run (off the UCSF VPN, failed calls...), when it was set up */
+    classifierNote?: string
     /** why re-checking open postings stopped, when it did (the import before it was still saved) */
     checkError?: string | null
     companies: Record<string, string>

@@ -27,7 +27,9 @@ Backends
          a gateway such as UCSF's, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION) or the Anthropic API
          (ANTHROPIC_API_KEY). One call per posting answers both questions with a one-line reason and also
          writes the posting's summary, responsibilities and qualifications. Model: AICD3_LLM_MODEL, else
-         ANTHROPIC_DEFAULT_HAIKU_MODEL, else Claude Haiku 4.5. Read from the environment or .env.local.
+         ANTHROPIC_DEFAULT_SONNET_MODEL, else Claude Sonnet 5. Read from the environment or .env.local.
+         UCSF's gateway (unified-api.ucsf.edu) only answers on the UCSF network or VPN: the run checks it
+         first and says so, then uses keyword rules, if it can't be reached.
            pip install "anthropic[bedrock]"
   rules  keyword rules, no download; the fallback when nothing else is available.
   auto   llm if its settings are there, else d3 if it loads, else rules (the default).
@@ -262,7 +264,10 @@ class D3:
 # Claude (Bedrock or the Anthropic API)
 # --------------------------------------------------------------------------------------
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DEFAULT_LLM_MODEL = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+DEFAULT_LLM_MODEL = "us.anthropic.claude-sonnet-5"        # Bedrock id (Claude Code's ANTHROPIC_DEFAULT_SONNET_MODEL)
+DEFAULT_API_MODEL = "claude-sonnet-5"                      # the same model on the Anthropic API
+VPN_HINT = ("UCSF's AI gateway only answers on the UCSF network: connect to the UCSF VPN (or campus network), "
+            "then run the refresh again")
 LLM_WORKERS = int(os.environ.get("AICD3_LLM_WORKERS", "4"))
 
 
@@ -329,13 +334,15 @@ class LLM:
     or the Anthropic API. Structured answers via a forced tool call."""
 
     def __init__(self, client=None, model: str | None = None):
-        self.model = model or env("AICD3_LLM_MODEL") or env("ANTHROPIC_DEFAULT_HAIKU_MODEL") or DEFAULT_LLM_MODEL
+        self.model = model or env("AICD3_LLM_MODEL") or env("ANTHROPIC_DEFAULT_SONNET_MODEL") or DEFAULT_LLM_MODEL
+        self.base_url = ""
         if client is not None:
             self.client, self.via = client, "test client"
             return
         import anthropic   # pip install "anthropic[bedrock]"
         if env("AWS_ACCESS_KEY_ID") and env("AWS_SECRET_ACCESS_KEY"):
             base = env("ANTHROPIC_BEDROCK_BASE_URL") or None
+            self.base_url = base or ""
             self.client = anthropic.AnthropicBedrock(
                 aws_access_key=env("AWS_ACCESS_KEY_ID"), aws_secret_key=env("AWS_SECRET_ACCESS_KEY"),
                 aws_region=env("AWS_REGION") or "us-west-2", base_url=base, timeout=60.0, max_retries=2)
@@ -344,11 +351,33 @@ class LLM:
             self.client = anthropic.Anthropic(api_key=env("ANTHROPIC_API_KEY"), timeout=60.0, max_retries=2)
             self.via = "the Anthropic API"
             if not env("AICD3_LLM_MODEL") and self.model == DEFAULT_LLM_MODEL:
-                self.model = "claude-haiku-4-5"
+                self.model = DEFAULT_API_MODEL
         else:
             raise RuntimeError("no Claude settings: set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY (Bedrock, with "
                                "ANTHROPIC_BEDROCK_BASE_URL for a gateway) or ANTHROPIC_API_KEY, in .env.local")
         log.info("llm: %s via %s", self.model, self.via)
+
+    @property
+    def needs_vpn(self) -> bool:
+        return "ucsf.edu" in self.base_url
+
+    def reachable(self, timeout: float = 8.0) -> tuple[bool, str]:
+        """Whether the gateway answers at all (any HTTP status counts; only no connection doesn't).
+        Done once before classifying, so a run off the VPN says so straight away instead of failing call by call."""
+        if not self.base_url:
+            return True, ""
+        import requests
+        host = self.base_url.split("/")[2]
+        started = time.monotonic()
+        try:
+            r = requests.get(self.base_url, timeout=timeout)
+            log.info("llm: gateway %s answered (HTTP %d) in %.1fs", host, r.status_code, time.monotonic() - started)
+            return True, ""
+        except requests.exceptions.Timeout:
+            why = f"no answer from {host} within {timeout:.0f}s"
+        except requests.exceptions.ConnectionError as e:
+            why = f"couldn't connect to {host} ({type(e).__name__})"
+        return False, why + (f". {VPN_HINT}." if self.needs_vpn else ".")
 
     def classify(self, title: str, company: str, description: str) -> Verdict:
         msg = self.client.messages.create(
@@ -374,13 +403,20 @@ class Classifier:
     def __init__(self, backend: str = "auto", cache_path: str | None = CACHE_PATH, llm_client=None):
         self.backend, self.d3, self.llm, self.cache_path = backend, None, None, cache_path
         self.llm_failures, self._lock = 0, threading.Lock()
+        self.fallback_reason = ""   # why Claude wasn't used for this run, for the run summary
         if backend == "llm" or (backend == "auto" and (llm_client is not None or llm_configured())):
             try:
                 self.llm = LLM(client=llm_client)
-            except Exception as e:  # SDK missing, bad settings...
+                ok, why = self.llm.reachable()
+                if not ok:
+                    self.llm = None
+                    raise ConnectionError(why)
+            except Exception as e:  # SDK missing, bad settings, off the VPN...
                 if backend == "llm":
                     raise
-                log.warning("Claude unavailable (%s: %s); trying the next classifier", e.__class__.__name__, str(e)[:200])
+                self.fallback_reason = str(e)[:300]
+                log.warning("Claude unavailable (%s: %s). Using the next classifier for this run.",
+                            e.__class__.__name__, str(e)[:300])
         if self.llm is None and backend in ("auto", "d3"):
             try:
                 self.d3 = D3()
@@ -438,10 +474,13 @@ class Classifier:
                 with self._lock:
                     self.llm_failures += 1
                     if self.llm_failures == 5:
+                        self.fallback_reason = (f"5 Claude calls failed (last: {type(e).__name__}: {str(e)[:150]})"
+                                                + (f". {VPN_HINT}" if self.llm.needs_vpn and "Connection" in type(e).__name__ else ""))
                         log.error("llm: 5 calls failed (last: %s: %s); keyword rules for the rest of this run",
                                   e.__class__.__name__, str(e)[:300])
-                log.warning("llm failed on %r after %.0fs (%s: %s); keyword rules for it", title,
-                            time.monotonic() - started, e.__class__.__name__, str(e)[:200])
+                hint = f" {VPN_HINT}." if self.llm.needs_vpn and "Connection" in type(e).__name__ else ""
+                log.warning("llm failed on %r after %.0fs (%s: %s); keyword rules for it.%s", title,
+                            time.monotonic() - started, e.__class__.__name__, str(e)[:200], hint)
         elif self.d3:
             try:
                 v = self.d3.classify(title, company, description)
@@ -476,8 +515,17 @@ def main(argv: list[str] | None = None) -> int:
         d = ("Build population PK/PD models in R and NONMEM for Phase 2 trials and automate simulation workflows "
              "in Python. Qualifications: pursuing a PhD or PharmD; experience with R or Python.")
         m = LLM()
+        ok, why = m.reachable()
+        if not ok:
+            print(f"Can't reach Claude: {why}")
+            return 1
         started = time.monotonic()
-        v = m.classify(t, co, d)
+        try:
+            v = m.classify(t, co, d)
+        except Exception as e:
+            hint = f"\n{VPN_HINT}." if m.needs_vpn and "Connection" in type(e).__name__ else ""
+            print(f"Claude call failed: {type(e).__name__}: {str(e)[:500]}{hint}")
+            return 1
         print(f"answered in {time.monotonic() - started:.1f}s by {m.model} via {m.via}")
         print(json.dumps(asdict(v) | {"decision": v.decision}, indent=2))
         return 0

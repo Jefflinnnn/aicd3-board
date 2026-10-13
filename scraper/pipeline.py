@@ -251,6 +251,8 @@ def _main(argv: list[str] | None = None) -> int:
     step("2/4 classify", f"{len(postings)} postings")
     clf = Classifier(args.classifier)
     print(f"classifier: {clf.name}", flush=True)
+    if clf.fallback_reason:
+        print(f"[warning] Claude not used: {clf.fallback_reason}", flush=True)
     records, report = build_records(postings, clf)
     clf.save()
 
@@ -306,7 +308,7 @@ def _main(argv: list[str] | None = None) -> int:
     bad = [n for n, s in status.items() if s.startswith(("BLOCKED", "UNAVAILABLE", "error"))]
     if args.summary_json:
         with open(args.summary_json, "w", encoding="utf-8") as f:
-            json.dump({"classifier": clf.name, "scraped": len(postings), **counts,
+            json.dump({"classifier": clf.name, "classifierNote": clf.fallback_reason, "scraped": len(postings), **counts,
                        "database": {k: data.get(k, 0) for k in ("added", "staged", "updated", "closed", "unchanged", "rejected", "dropped", "unlisted")},
                        "errors": len(data.get("errors", [])), "checked": checked, "checkError": checked_error,
                        "companies": status, "failed": bad}, f)

@@ -31,7 +31,7 @@ step "3/5  Headless Chromium for Lilly's fallback route (about 150 MB, once)"
 "$PY" -m pip install --upgrade --progress-bar on playwright
 "$PY" -m playwright install chromium
 
-step "4/5  Checking Claude (settings from .env.local: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION, ANTHROPIC_BEDROCK_BASE_URL)"
+step "4/5  Checking Claude (settings from .env.local; UCSF's gateway needs the UCSF VPN)"
 "$PY" scraper/classify.py --check --classifier llm || echo "Claude isn't reachable with these settings; refreshes will use keyword rules. The error above says why."
 
 step "5/5  Dry run for Eli Lilly (nothing is saved; full log in scraper/out/logs/)"

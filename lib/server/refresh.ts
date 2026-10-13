@@ -78,7 +78,7 @@ export function classifierInfo(): { llm: string; d3: boolean; revision: string; 
   // Bedrock keys, optionally behind a gateway (ANTHROPIC_BEDROCK_BASE_URL), or an Anthropic API key
   const e = process.env
   const llm = (e.AWS_ACCESS_KEY_ID && e.AWS_SECRET_ACCESS_KEY) || e.ANTHROPIC_API_KEY
-    ? e.AICD3_LLM_MODEL || e.ANTHROPIC_DEFAULT_HAIKU_MODEL || (e.AWS_ACCESS_KEY_ID ? "us.anthropic.claude-haiku-4-5-20251001-v1:0" : "claude-haiku-4-5")
+    ? e.AICD3_LLM_MODEL || e.ANTHROPIC_DEFAULT_SONNET_MODEL || (e.AWS_ACCESS_KEY_ID ? "us.anthropic.claude-sonnet-5" : "claude-sonnet-5")
     : ""
   const d3 = fs.existsSync(D3_OK) && fs.existsSync(VENV_PY)
   const supported = (process.platform === "darwin" && process.arch === "arm64") || WIN || process.platform === "linux"
