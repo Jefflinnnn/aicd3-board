@@ -138,7 +138,7 @@ const rowsOf = (plan: ImportPlan) => [
 ]
 
 export function ImportDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
-  const { jobs, staged, saveJobs, saveStaged, touchMeta } = useApp()
+  const { jobs, staged, saveJobs, saveStaged, dropStaged, moveToBin, touchMeta } = useApp()
   const [reviewAll, setReviewAll] = useState(false)
   const [text, setText] = useState("")
   const [fileName, setFileName] = useState("")
@@ -155,17 +155,19 @@ export function ImportDialog({ open, onOpenChange }: { open: boolean; onOpenChan
     }
   }, [text, jobs, closeMissing, staged, reviewAll])
   const plan = result.plan
-  const changes = plan ? plan.add.length + plan.update.length + plan.close.length + plan.stage.length + plan.restage.length : 0
+  const changes = plan ? plan.add.length + plan.update.length + plan.close.length + plan.stage.length + plan.restage.length + plan.dropStale.length + plan.unlist.length : 0
 
   const apply = async () => {
     if (!plan || !changes) return
     setBusy(true)
     try {
+      if (plan.dropStale.length) await dropStaged(plan.dropStale.map((s) => s.id))
+      if (plan.unlist.length) await moveToBin(plan.unlist.map((j) => j.id))
       await saveStaged([...plan.stage, ...plan.restage])
       await saveJobs([...plan.add, ...plan.update, ...plan.close])
       await touchMeta({ lastImport: { at: Date.now(), added: plan.add.length, updated: plan.update.length, closed: plan.close.length } })
       toast("Import finished", {
-        description: `${plan.add.length} published, ${plan.stage.length} sent for review, ${plan.update.length} updated, ${plan.close.length} marked taken down.`,
+        description: `${plan.add.length} published, ${plan.stage.length} sent for review, ${plan.update.length} updated, ${plan.close.length} marked taken down${plan.dropStale.length ? `, ${plan.dropStale.length} cleared from review` : ""}${plan.unlist.length ? `, ${plan.unlist.length} moved to the bin as no longer a fit` : ""}.`,
       })
       setText("")
       setFileName("")

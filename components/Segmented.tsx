@@ -60,7 +60,7 @@ export function Segmented<T extends string>({
       {pill && (
         <span
           aria-hidden
-          className={cn("absolute rounded-md bg-card shadow-sm", ready && "transition-[left,top,width] duration-300 ease-[cubic-bezier(.3,.7,.2,1)]")}
+          className={cn("absolute rounded-md bg-card shadow-sm", ready && "transition-[left,top,width] duration-300 [transition-timing-function:cubic-bezier(.3,.7,.2,1)]")}
           style={{ left: pill.left, top: pill.top, width: pill.width, height: pill.height }}
         />
       )}

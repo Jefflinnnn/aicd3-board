@@ -46,6 +46,13 @@ export interface JobFilters {
   status: StatusFilter
 }
 export const EMPTY_FILTERS: JobFilters = { company: [], location: [], category: [], type: [], deadline: "", status: "live" }
+/** "state:CA" in the location filter matches every site in that state */
+export const STATE_PREFIX = "state:"
+/**
+ * What the job board shows on a first visit: the program's focus (drug discovery and development)
+ * in California. Students can widen or clear these; Reset comes back here.
+ */
+export const DEFAULT_FILTERS: JobFilters = { ...EMPTY_FILTERS, category: ["discovery", "development"], location: [STATE_PREFIX + "CA"] }
 
 export type BoardTab = "todo" | "saved" | "done"
 

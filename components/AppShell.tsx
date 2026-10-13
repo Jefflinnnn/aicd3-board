@@ -18,6 +18,7 @@ import { useBackend } from "@/lib/backend"
 import { Gate } from "@/components/Gate"
 import { ReportDialog } from "@/components/ReportDialog"
 import { cn } from "@/lib/utils"
+import { spotlightLeave, spotlightMove, spotlightScroll } from "@/components/spotlight"
 import { AICD_LOGO_INNER } from "@/components/aicdLogo"
 import { CommandMenu, Keys } from "@/components/CommandMenu"
 import { Backdrop } from "@/components/Backdrop"
@@ -315,7 +316,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             <nav ref={navRef} className="relative flex flex-col gap-0.5">
               <span
                 aria-hidden
-                className={cn("absolute rounded-lg bg-sidebar-active", pillReady && "transition-[top,left,width,height,opacity] duration-300 ease-[cubic-bezier(.3,.7,.2,1)]", !pill && "opacity-0")}
+                className={cn("absolute rounded-lg bg-sidebar-active", pillReady && "transition-[top,left,width,height,opacity] duration-300 [transition-timing-function:cubic-bezier(.3,.7,.2,1)]", !pill && "opacity-0")}
                 style={pill ? { top: pill.top, left: pill.left, width: pill.width, height: pill.height } : undefined}
               />
               {PAGES.filter((p) => p.id !== "admin" || me.canEdit).map((p) => <NavItem key={p.id} {...p} />)}
@@ -389,14 +390,10 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           <main
             id="main"
             className="relative isolate h-full min-w-0 overflow-y-auto"
-            onPointerMove={(e) => {
-              // cards marked .spotlight light up under the pointer (Linear and Vercel do this)
-              const el = (e.target as HTMLElement).closest<HTMLElement>(".spotlight")
-              if (!el) return
-              const r = el.getBoundingClientRect()
-              el.style.setProperty("--mx", `${e.clientX - r.left}px`)
-              el.style.setProperty("--my", `${e.clientY - r.top}px`)
-            }}
+            // cards marked .spotlight glow near the pointer, across neighbouring cards, with a short trail on quick moves
+            onPointerMove={spotlightMove}
+            onPointerLeave={spotlightLeave}
+            onScroll={spotlightScroll}
           >
             {settings.backdrop && <Backdrop key={navPage} />}
             {/* sticky top bar: where you are, how fresh the data is, and the ⌘K search */}

@@ -14,7 +14,7 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { CatChip, DeadlineCell, LocationCell, NewBadge, PageHead, StatusPill } from "@/components/common"
-import { EMPTY_FILTERS, SORT_PRESETS, useApp, type DeadlineFilter, type JobFilters, type SortKey, type SortSpec, type StatusFilter } from "@/lib/state"
+import { DEFAULT_FILTERS, EMPTY_FILTERS, STATE_PREFIX, SORT_PRESETS, useApp, type DeadlineFilter, type JobFilters, type SortKey, type SortSpec, type StatusFilter } from "@/lib/state"
 import { CATS, COMPANIES, TYPES, catById, coById, daysLeft, fmt, isLive, jobLocations, milesFromHome, parse, store, type Job } from "@/lib/data"
 import type { MyStatus } from "@/lib/backend"
 import { cn } from "@/lib/utils"
@@ -42,7 +42,14 @@ function deadlineRank(j: Job): [number, number] {
 }
 
 /** Per-viewer convenience: the board remembers its view in this browser. */
-interface BoardView { q: string; filters: JobFilters; sort: SortSpec; tab: Tab; pageSize: number }
+interface BoardView { q: string; filters: JobFilters; sort: SortSpec; tab: Tab; pageSize: number; filtersV?: number }
+/** bump when DEFAULT_FILTERS changes, so remembered filters from before don't hide the new defaults */
+const FILTERS_V = 2
+const STATE_NAMES: Record<string, string> = { CA: "California", MA: "Massachusetts", NJ: "New Jersey", NY: "New York", PA: "Pennsylvania", IL: "Illinois", IN: "Indiana", NC: "North Carolina", MD: "Maryland", WA: "Washington", CT: "Connecticut", OR: "Oregon", OH: "Ohio", GA: "Georgia", UT: "Utah", TX: "Texas", RI: "Rhode Island", DE: "Delaware", MO: "Missouri", CO: "Colorado" }
+const stateOf = (loc: string) => /, ([A-Z]{2})$/.exec(loc)?.[1] || ""
+/** a location filter value matches a site: "state:CA" any California site, else the exact site */
+const locMatch = (value: string, loc: string) => (value.startsWith(STATE_PREFIX) ? stateOf(loc) === value.slice(STATE_PREFIX.length) : value === loc)
+const sameFilters = (a: JobFilters, b: JobFilters) => JSON.stringify(a) === JSON.stringify(b)
 
 /* ---------- menu content shared by headers, chips and “+ Filter” ---------- */
 function ListOptions({ prop, options, selected, onChange }: { prop: ListProp; options: [string, string][]; selected: string[]; onChange: (v: string[]) => void }) {
@@ -89,7 +96,9 @@ export default function JobBoard() {
   const remembered = store.get<Partial<BoardView>>("board", {})
   // arriving from a link elsewhere (a chart, the map): start with its filters so nothing flips after the page appears
   const [q, setQ] = useState(pendingFilter ? "" : remembered.q ?? "")
-  const [filters, setFilters] = useState<JobFilters>(pendingFilter ? { ...EMPTY_FILTERS, ...pendingFilter } : { ...EMPTY_FILTERS, ...(remembered.filters || {}) })
+  const [filters, setFilters] = useState<JobFilters>(
+    pendingFilter ? { ...EMPTY_FILTERS, ...pendingFilter } : remembered.filtersV === FILTERS_V && remembered.filters ? { ...EMPTY_FILTERS, ...remembered.filters } : { ...DEFAULT_FILTERS }
+  )
   const [sort, setSort] = useState<SortSpec>(remembered.sort || presetOf(settings.sort))
   const [tab, setTab] = useState<Tab>(pendingTab || (pendingFilter ? "todo" : remembered.tab || "todo"))
   const [page, setPage] = useState(1)
@@ -97,7 +106,7 @@ export default function JobBoard() {
   const searchRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
-    store.set("board", { q, filters, sort, tab, pageSize } satisfies BoardView)
+    store.set("board", { q, filters, sort, tab, pageSize, filtersV: FILTERS_V } satisfies BoardView)
   }, [q, filters, sort, tab, pageSize])
   useEffect(() => setPage(1), [q, filters, sort, tab, pageSize])
 
@@ -129,7 +138,16 @@ export default function JobBoard() {
 
   const options: Record<ListProp, [string, string][]> = useMemo(() => ({
     company: COMPANIES.filter((c) => jobs.some((j) => j.company === c.id)).map((c) => [c.id, c.name] as [string, string]),
-    location: [...new Set(jobs.flatMap(jobLocations))].sort((a, b) => milesFromHome(a) - milesFromHome(b) || a.localeCompare(b)).map((l) => [l, l] as [string, string]),
+    location: (() => {
+      const sites = [...new Set(jobs.flatMap(jobLocations))].sort((a, b) => milesFromHome(a) - milesFromHome(b) || a.localeCompare(b))
+      // whole states first ("All of California"), nearest first, then the individual sites
+      const states = [...new Set(sites.map(stateOf).filter(Boolean))]
+      if (!states.includes("CA")) states.unshift("CA")
+      return [
+        ...states.map((st) => [STATE_PREFIX + st, `All of ${STATE_NAMES[st] || st}`] as [string, string]),
+        ...sites.map((l) => [l, l] as [string, string]),
+      ]
+    })(),
     category: CATS.map((c) => [c.id, c.label] as [string, string]),
     type: TYPES.map((t) => [t, t] as [string, string]),
   }), [jobs])
@@ -143,7 +161,7 @@ export default function JobBoard() {
         if (!ql.split(/\s+/).every((w) => hay.includes(w))) return false
       }
       if (filters.company.length && !filters.company.includes(j.company)) return false
-      if (filters.location.length && !jobLocations(j).some((l) => filters.location.includes(l))) return false
+      if (filters.location.length && !jobLocations(j).some((l) => filters.location.some((v) => locMatch(v, l)))) return false
       if (filters.category.length && !filters.category.includes(j.category)) return false
       if (filters.type.length && !filters.type.includes(c.type)) return false
       const live = isLive(j)
@@ -197,8 +215,10 @@ export default function JobBoard() {
     .sort((a, b) => (daysLeft(a) as number) - (daysLeft(b) as number))
 
   const activeList = (Object.keys(options) as ListProp[]).filter((p) => filters[p].length)
-  const anyFilter = !!(q || activeList.length || filters.deadline || filters.status !== "live")
-  const resetAll = () => { setQ(""); setFilters({ ...EMPTY_FILTERS }) }
+  const anyFilter = !!(q || !sameFilters(filters, DEFAULT_FILTERS))
+  const resetAll = () => { setQ(""); setFilters({ ...DEFAULT_FILTERS }) }
+  const onDefaults = !q && sameFilters(filters, DEFAULT_FILTERS)
+  const showAll = () => { setQ(""); setFilters({ ...EMPTY_FILTERS }) }
 
   const chipText = (p: ListProp) => {
     const names = filters[p].map((v) => options[p].find((o) => o[0] === v)?.[1] || v)
@@ -446,7 +466,11 @@ export default function JobBoard() {
           {rows.length === 0 ? (
             <p className="px-4 py-14 text-center text-sm text-muted-foreground">
               {tab === "done" && !applied.size ? "Roles you mark as applied show up here." : tab === "saved" && !saved.size ? "Save roles with the bookmark to come back to them." : "No postings match these filters."}
-              {anyFilter && <> <button className="text-primary hover:underline" onClick={resetAll}>Reset filters</button></>}
+              {onDefaults ? (
+                <> These are discovery and development roles in California. <button className="text-primary hover:underline" onClick={showAll}>Show every role</button></>
+              ) : (
+                <> <button className="text-primary hover:underline" onClick={resetAll}>Reset filters</button> or <button className="text-primary hover:underline" onClick={showAll}>show every role</button></>
+              )}
             </p>
           ) : (
             <>

@@ -162,18 +162,21 @@ export function UsMap({ jobs, onCity, onState }: { jobs: Job[]; onCity: (city: s
   /* Zooming eases toward a target zoom a little each frame, so wheel notches, the buttons and reset
      all glide instead of jumping. Zoom and center are set as options (not a roam action) so the states
      and the dots are always redrawn together. */
-  const getCenter = (c: echarts.ECharts) =>
-    ((c as unknown as { getModel: () => unknown }).getModel() as { getComponent: (t: string, i: number) => { coordinateSystem: { getCenter: () => number[] } } })
-      .getComponent("geo", 0).coordinateSystem.getCenter()
+  /** The map's current center, or null when the chart is gone (page left mid-animation) or not drawn yet. */
+  const getCenter = (c: echarts.ECharts): number[] | null => {
+    if (c.isDisposed()) return null
+    const model = (c as unknown as { getModel: () => { getComponent: (t: string, i: number) => { coordinateSystem?: { getCenter: () => number[] } } | null } | null }).getModel()
+    return model?.getComponent("geo", 0)?.coordinateSystem?.getCenter() ?? null
+  }
   const anim = useRef({ target: 1, anchor: null as [number, number] | null, home: false, raf: 0 })
   const EASE = 0.25
   const frame = () => {
     const a = anim.current
     a.raf = 0
     const c = inst.current
-    if (!c) return
+    const center = c ? getCenter(c) : null
+    if (!c || !center) return
     const cur = zoomRef.current
-    const center = getCenter(c)
     const home = homeCenter.current
     const zoomDone = Math.abs(Math.log(a.target / cur)) < 0.004
     const next = zoomDone ? a.target : cur * Math.pow(a.target / cur, EASE)
@@ -243,6 +246,7 @@ export function UsMap({ jobs, onCity, onState }: { jobs: Job[]; onCity: (city: s
           inst.current = c
           // remember where the whole-country view sits so zooming out can glide back to it
           requestAnimationFrame(() => { if (!homeCenter.current && zoomRef.current === 1) homeCenter.current = getCenter(c) })
+          // (getCenter is null if the page was left before this frame; the next onReady sets it)
         }}
         onClick={(p) => {
           if ((p as unknown as { seriesType: string }).seriesType === "scatter") onCity(p.name)

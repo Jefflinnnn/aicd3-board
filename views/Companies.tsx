@@ -12,7 +12,7 @@ import { Segmented } from "@/components/Segmented"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { PageHead } from "@/components/common"
 import { useApp } from "@/lib/state"
-import { CATS, COMPANIES, TODAY, TYPES, fmt, iso, isLive, store } from "@/lib/data"
+import { CATS, COMPANIES, TODAY, TYPES, fmt, iso, isLive, jobLocations, store, type Company, type Job } from "@/lib/data"
 import { isEmail, normalizeUrl } from "@/lib/validate"
 import { cn } from "@/lib/utils"
 
@@ -128,6 +128,25 @@ function RequestDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o
   )
 }
 
+/** What a student wants to know about a company at a glance: what's open, in which areas, where, and how soon it closes. */
+function companyStats(c: Company, jobs: Job[]) {
+  const cj = jobs.filter((j) => j.company === c.id)
+  const open = cj.filter(isLive)
+  const byCat = CATS.map((k) => ({ cat: k, n: open.filter((j) => j.category === k.id).length })).filter((x) => x.n > 0)
+  const deadlines = open.map((j) => j.deadline).filter(Boolean).sort()
+  const places = new Map<string, number>()
+  for (const j of open) for (const l of jobLocations(j)) places.set(l, (places.get(l) || 0) + 1)
+  const where = [...places.entries()].sort((a, b) => b[1] - a[1]).map(([l]) => l)
+  const lastPosted = cj.map((j) => j.posted).sort().at(-1) || ""
+  return { live: open.length, total: cj.length, byCat, nextDeadline: deadlines[0] || "", rolling: open.length > 0 && deadlines.length < open.length, where, lastPosted }
+}
+
+function closesText(s: ReturnType<typeof companyStats>) {
+  if (!s.live) return ""
+  if (s.nextDeadline) return `Next deadline ${fmt(s.nextDeadline)}`
+  return "Rolling deadlines"
+}
+
 export default function Companies() {
   const { jobs, myInbox, go } = useApp()
   const requests = myInbox.requests
@@ -167,35 +186,29 @@ export default function Companies() {
 
       {view === "list" ? (
         <div key={"list" + filter} className="spotlight overflow-x-auto rounded-lg border bg-card duration-200 animate-in fade-in">
-          <table className="w-full min-w-[760px] border-collapse text-sm">
+          <table className="w-full min-w-[880px] border-collapse text-sm">
             <thead>
-              <tr className="border-b bg-muted/60 text-left text-[0.7rem] uppercase tracking-[0.07em] text-muted-foreground">
+              <tr className="whitespace-nowrap border-b bg-muted/60 text-left text-[0.7rem] uppercase tracking-[0.07em] text-muted-foreground">
                 <th className="px-5 py-2.5 font-semibold">Company</th>
                 <th className="px-3 py-2.5 font-semibold">Type</th>
-                <th className="px-3 py-2.5 font-semibold">Hiring mix</th>
+                <th className="px-3 py-2.5 font-semibold">Open roles by area</th>
+                <th className="px-3 py-2.5 font-semibold">Next deadline</th>
                 <th className="px-3 py-2.5 text-right font-semibold">Live</th>
-                <th className="px-3 py-2.5 text-right font-semibold">All-time</th>
                 <th className="px-5 py-2.5 text-right font-semibold"><span className="sr-only">Links</span></th>
               </tr>
             </thead>
             <tbody>
               {list.map((c) => {
-                const cj = jobs.filter((j) => j.company === c.id)
-                const lv = cj.filter(isLive).length
-                const n = CATS.map((k) => cj.filter((j) => j.category === k.id).length)
-                const tot = n.reduce((a, b) => a + b, 0)
-                const share = tot ? n.map((v) => v / tot) : CATS.map((_, i) => c.focus[i] || 0)
+                const st = companyStats(c, jobs)
+                const lv = st.live
+                const tot = st.total
                 return (
                   <tr key={c.id} className="border-b transition-colors last:border-b-0 hover:bg-muted/50">
                     <td className="px-5 py-2.5"><div className="font-medium">{c.name}</div><div className="text-xs text-muted-foreground">{c.hq}</div></td>
-                    <td className="px-3 text-muted-foreground">{c.type}</td>
-                    <td className="px-3">
-                      <div className="flex h-1.5 w-40 gap-0.5 overflow-hidden rounded-full bg-muted" role="img" aria-label={"Hiring mix: " + CATS.map((k, i) => `${k.short} ${Math.round(share[i] * 100)}%`).join(", ")}>
-                        {CATS.map((k, i) => share[i] > 0 && <span key={k.id} style={{ width: `${share[i] * 100}%`, background: `var(${k.color})` }} />)}
-                      </div>
-                    </td>
+                    <td className="whitespace-nowrap px-3 text-muted-foreground">{c.type}</td>
+                    <td className="px-3"><AreaChips stats={st} company={c.id} nowrap /></td>
+                    <td className="whitespace-nowrap px-3 text-muted-foreground">{st.nextDeadline ? fmt(st.nextDeadline) : st.live ? "Rolling" : "–"}</td>
                     <td className="px-3 text-right font-mono tabular-nums">{lv}</td>
-                    <td className="px-3 text-right font-mono tabular-nums text-muted-foreground">{tot}</td>
                     <td className="px-5">
                       <div className="flex items-center justify-end gap-3">
                         <a href={c.site} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline">Site <ArrowUpRight className="size-3" /></a>
@@ -213,12 +226,9 @@ export default function Companies() {
       ) : (
       <div key={filter} className="grid auto-rows-fr gap-4 [grid-template-columns:repeat(auto-fill,minmax(min(100%,280px),1fr))]">
         {list.map((c, idx) => {
-          const cj = jobs.filter((j) => j.company === c.id)
-          const lv = cj.filter(isLive).length
-          const n = CATS.map((k) => cj.filter((j) => j.category === k.id).length)
-          const tot = n.reduce((a, b) => a + b, 0)
-          const share = tot ? n.map((v) => v / tot) : CATS.map((_, i) => c.focus[i] || 0)
-          const focusTxt = CATS.filter((_, i) => share[i] >= 0.2).map((k) => k.short).join(", ")
+          const st = companyStats(c, jobs)
+          const lv = st.live
+          const tot = st.total
           return (
             <article
               key={c.id}
@@ -232,11 +242,14 @@ export default function Companies() {
                 </div>
                 <span className="shrink-0 whitespace-nowrap rounded-full bg-muted px-2 py-0.5 text-xs font-medium">{c.type}</span>
               </div>
-              <div>
-                <div className="flex h-2 gap-0.5 overflow-hidden rounded-full bg-muted" role="img" aria-label={"Hiring mix: " + CATS.map((k, i) => `${k.short} ${Math.round(share[i] * 100)}%`).join(", ")}>
-                  {CATS.map((k, i) => share[i] > 0 && <span key={k.id} style={{ width: `${share[i] * 100}%`, background: `var(${k.color})` }} />)}
-                </div>
-                <p className="mt-1.5 truncate text-xs text-muted-foreground">Mostly hires for {focusTxt || "a mix of areas"}</p>
+              <div className="flex flex-col gap-1.5">
+                {/* room for two rows of chips, so the lines below sit at the same height on every card */}
+                <div className="min-h-[3.25rem]"><AreaChips stats={st} company={c.id} /></div>
+                <p className="truncate text-xs text-muted-foreground" title={st.where.join("; ")}>
+                  {st.live
+                    ? [closesText(st), st.where.length ? `${st.where[0]}${st.where.length > 1 ? ` +${st.where.length - 1} more` : ""}` : ""].filter(Boolean).join(" · ")
+                    : st.lastPosted ? `Last posting seen ${fmt(st.lastPosted)}` : "We\u2019ll list roles here when they\u2019re posted"}
+                </p>
               </div>
               <div className="grid grid-cols-2 gap-4 text-sm text-muted-foreground">
                 <div><b className="block font-display text-2xl leading-none tabular-nums text-foreground">{lv}</b>live now</div>
@@ -264,7 +277,7 @@ export default function Companies() {
       {requests.length > 0 && (
         <section className="spotlight rounded-lg border bg-card p-5">
           <h2 className="font-display text-[1rem] font-semibold">Your requests</h2>
-          <p className="text-[0.82rem] text-muted-foreground">We'll review these and add the ones that fit.</p>
+          <p className="text-[0.82rem] text-muted-foreground">We&apos;ll review these and add the ones that fit.</p>
           <ul className="mt-2">
             {requests.map((r) => (
               <li key={r.id} className="flex flex-wrap items-baseline gap-x-4 gap-y-1 border-t py-2.5 first:border-t-0">
@@ -278,6 +291,29 @@ export default function Companies() {
       )}
 
       <RequestDialog open={reqOpen} onOpenChange={setReqOpen} />
+    </div>
+  )
+}
+
+/** Open roles per area; each chip opens the job board filtered to that company and area. */
+function AreaChips({ stats, company, nowrap = false }: { stats: ReturnType<typeof companyStats>; company: string; nowrap?: boolean }) {
+  const { go } = useApp()
+  if (!stats.byCat.length) return <span className="text-xs text-muted-foreground">No open roles right now</span>
+  return (
+    <div className={cn("flex gap-1.5", nowrap ? "flex-nowrap" : "flex-wrap")}>
+      {stats.byCat.map(({ cat, n }) => (
+        <button
+          key={cat.id}
+          type="button"
+          onClick={() => go("jobs", { company: [company], category: [cat.id] })}
+          className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border px-2 py-0.5 text-xs font-medium transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          aria-label={`${n} open ${cat.label} role${n === 1 ? "" : "s"}`}
+        >
+          <span className="size-2 rounded-[2px]" style={{ background: `var(${cat.color})` }} />
+          {cat.short}
+          <span className="tabular-nums text-muted-foreground">{n}</span>
+        </button>
+      ))}
     </div>
   )
 }
