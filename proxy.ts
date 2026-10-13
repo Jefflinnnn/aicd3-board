@@ -13,10 +13,11 @@ const OPEN = ["/api/ingest"]
 
 export default async function proxy(request: NextRequest) {
   const path = request.nextUrl.pathname
-  // The public demo (DEMO_MODE=1): open to anyone, made-up data only. No sign-in, no API.
+  // The public demo (DEMO_MODE=1): open to anyone, made-up data only (the admin view included, in the
+  // visitor's own browser). No sign-in, no API.
   if (process.env.DEMO_MODE === "1") {
     if (path.startsWith("/api/")) return NextResponse.json({ error: "Not found" }, { status: 404 })
-    if (path.startsWith("/auth") || path.startsWith("/admin")) return NextResponse.redirect(new URL("/", request.url))
+    if (path.startsWith("/auth")) return NextResponse.redirect(new URL("/", request.url))
     return NextResponse.next()
   }
   if (OPEN.some((p) => path === p || path.startsWith(p + "/"))) return NextResponse.next()

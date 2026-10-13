@@ -281,7 +281,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
   const initials = (backend.myName || (mode === "preview" ? "Guest" : isStaff ? "Staff" : "Student"))
     .split(/\s+/).map((w) => w[0]).join("").slice(0, 2).toUpperCase()
-  const roleLabel = backend.demo ? "Demo visitor" : isStaff ? (studentView ? "Staff, viewing as student" : backend.me.role === "admin" ? "Admin" : "Program staff") : mode === "pending" ? "Waiting for approval" : "Student"
+  const roleLabel = backend.demo ? (studentView ? "Demo visitor, viewing as student" : "Demo visitor (admin view)") : isStaff ? (studentView ? "Staff, viewing as student" : backend.me.role === "admin" ? "Admin" : "Program staff") : mode === "pending" ? "Waiting for approval" : "Student"
 
   const toggle = () => {
     const next = !collapsed

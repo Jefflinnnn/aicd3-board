@@ -11,7 +11,7 @@
  * - signedout: the session ended; the page goes to /auth/sign-in.
  * - preview: local development before `neon deploy` (no database or sign-in configured):
  *   sample data kept in this browser, as in the original MVP. With `demo` (the public demo,
- *   DEMO_MODE=1): made-up companies, and the visitor is a student, not an admin.
+ *   DEMO_MODE=1): made-up companies; the visitor can use the admin view, all in their own browser.
  * - unavailable: the server couldn't be reached or isn't configured.
  *
  * Writes update the screen straight away and are sent to the server one at a time, in order.
@@ -82,8 +82,9 @@ export function useBackend() {
     store.set("mine", stamped)
     setMineS(stamped)
     setMyInbox(store.get("myInbox", { requests: [], reports: [] }))
-    setMe(asDemo ? { id: "demo", canEdit: false, role: "student", name: null, email: null }
-                 : { id: "local", canEdit: true, role: "admin", name: null, email: null })
+    // demo visitors see the admin view too; everything they change stays in their own browser, and the
+    // server refuses every action in demo mode (lib/server/access.ts)
+    setMe({ id: asDemo ? "demo" : "local", canEdit: true, role: "admin", name: null, email: null })
     setLoaded({ jobs: true, mine: true })
     setMode("preview")
   }, [setBinS, setJobsS, setMineS, setMode, setMyInbox, setStagedS])

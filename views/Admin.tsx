@@ -48,7 +48,7 @@ function agoShort(t?: number) {
 export default function Admin() {
   const now = useNow()
   const app = useApp()
-  const { mode, me, jobs, bin, staged, meta, allInbox, names, settings, dark, openJob, saveJobs, moveToBin, restore, deleteForever, setCustomCats, resolveInbox, resetSample, saveStaged, approve, pullToReview } = app
+  const { mode, demo, me, jobs, bin, staged, meta, allInbox, names, settings, dark, openJob, saveJobs, moveToBin, restore, deleteForever, setCustomCats, resolveInbox, resetSample, saveStaged, approve, pullToReview } = app
   const [q, setQ] = useState("")
   const [co, setCo] = useState("all")
   const [chartRange, setChartRange] = useState<"7" | "14" | "30" | "90" | "all">("30")
@@ -535,7 +535,7 @@ export default function Admin() {
           )}
         </Panel>
         {mode === "preview" && (
-          <Panel title="Sample data" sub="This preview copy runs on sample postings in this browser.">
+          <Panel title="Sample data" sub={demo ? "The demo runs on example postings in your browser. Change anything here; reset to start over." : "This preview copy runs on sample postings in this browser."}>
             <Button variant="outline" className="self-start border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive" onClick={() => setResetOpen(true)}>Reset sample data</Button>
           </Panel>
         )}

@@ -31,7 +31,7 @@ function took(r: RefreshRun) {
  * The server runs it in the background; this panel polls for progress.
  */
 export function Refresh() {
-  const { mode, reload } = useApp()
+  const { mode, reload, demo } = useApp()
   const [st, setSt] = useState<RefreshStatus | null>(null)
   const [busy, setBusy] = useState(false)
   const [now, setNow] = useState(0)
@@ -67,6 +67,17 @@ export function Refresh() {
     return () => window.clearInterval(id)
   }, [mode, apply, running])
 
+  if (mode !== "cloud" && demo)
+    return (
+      <Panel id="admin-refresh" title="Job data refresh" sub="How postings get onto the board.">
+        <p className="text-sm text-muted-foreground">
+          The demo’s postings are examples. On the real board, a scraper visits each tracked company’s career site every
+          other day, keeps US internships, has Claude judge whether each is centred on ML or computational work and in drug
+          discovery or development, writes a summary, and sends unsure ones to the review queue above. Postings that close
+          are taken down automatically. Each run’s results and log appear here.
+        </p>
+      </Panel>
+    )
   if (mode !== "cloud")
     return (
       <Panel id="admin-refresh" title="Job data refresh" sub="Scraping the career sites works once the database and sign-in are set up (see the README).">
