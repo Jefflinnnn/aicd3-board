@@ -127,10 +127,11 @@ export function Refresh() {
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-b py-3 text-sm">
           <Cpu className="size-4 text-muted-foreground" aria-hidden />
           <span>
-            Classifier: <b className="font-medium">{st.classifier.d3 ? "d3-flash" : "keyword rules"}</b>
-            {st.classifier.d3 && st.classifier.revision && <span className="text-muted-foreground"> (version {st.classifier.revision.slice(0, 7)})</span>}
+            Classifier: <b className="font-medium">{st.classifier.llm ? "Claude" : st.classifier.d3 ? "d3-flash" : "keyword rules"}</b>
+            {st.classifier.llm && <span className="text-muted-foreground"> ({st.classifier.llm}; keyword rules if it can’t be reached)</span>}
+            {!st.classifier.llm && st.classifier.d3 && st.classifier.revision && <span className="text-muted-foreground"> (version {st.classifier.revision.slice(0, 7)})</span>}
           </span>
-          {!st.classifier.d3 && !st.classifier.canSetup && (
+          {!st.classifier.llm && !st.classifier.d3 && !st.classifier.canSetup && (
             <>
               <Button size="sm" variant="outline" className="h-8" disabled={busy || running}
                 onClick={() => act(async () => { const r = await setupClassifier(); if (!r.started) toast("Something is already running; try again when it finishes.") }, "Setting up d3-flash. You can leave this page; it keeps going.")}>
@@ -141,7 +142,7 @@ export function Refresh() {
               </span>
             </>
           )}
-          {!st.classifier.d3 && st.classifier.canSetup && <span className="basis-full text-xs text-muted-foreground">{st.classifier.canSetup}</span>}
+          {!st.classifier.llm && !st.classifier.d3 && st.classifier.canSetup && <span className="basis-full text-xs text-muted-foreground">{st.classifier.canSetup}</span>}
         </div>
       )}
 
@@ -198,7 +199,7 @@ function RunRow({ run, detailed = false }: { run: RefreshRun; detailed?: boolean
           {s.scraped} US internships found: <b className="font-medium text-foreground">{d.added} new on the board</b>, {d.staged} sent to review,{" "}
           {d.updated} updated, {d.closed} closed{d.dropped ? `, ${d.dropped} cleared from review` : ""}{d.unlisted ? `, ${d.unlisted} moved to the bin as no longer a fit` : ""}, {s.skip} left out as not ML/automation-focused{s.undergrad ? `, ${s.undergrad} left out as undergraduate-only` : ""}
           {s.checked && `; re-check: ${s.checked.closed} taken down, ${s.checked.unknown} need a look`}.
-          {detailed && ` Classifier: ${s.classifier === "d3" ? "d3-flash" : "keyword rules"}.`}
+          {detailed && ` Classifier: ${s.classifier === "llm" ? "Claude" : s.classifier === "d3" ? "d3-flash" : "keyword rules"}.`}
         </p>
       )}
       {detailed && s?.failed?.length ? (

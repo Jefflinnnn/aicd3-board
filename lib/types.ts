@@ -91,5 +91,6 @@ export interface RefreshStatus {
   nextAt: number | null
   runs: RefreshRun[]
   /** which classifier refreshes use; canSetup is why this server can't set up d3-flash, or null */
-  classifier: { d3: boolean; revision: string; canSetup: string | null }
+  /** llm: the Claude model refreshes use ("" when not configured); canSetup is why this server can't set up d3-flash, or null */
+  classifier: { llm: string; d3: boolean; revision: string; canSetup: string | null }
 }

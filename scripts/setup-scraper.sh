@@ -16,10 +16,10 @@ if [ -f .env.local ] && grep -q '^SCRAPER_PYTHON=' .env.local; then
 fi
 step "Python: $PY ($("$PY" --version 2>&1), at $(command -v "$PY" || echo "$PY"))"
 
-step "1/4  Scraper packages (requests, BeautifulSoup, lxml, curl_cffi)"
+step "1/5  Scraper packages (requests, BeautifulSoup, lxml, curl_cffi, anthropic)"
 "$PY" -m pip install --upgrade --progress-bar on -r scraper/requirements.txt
 
-step "2/4  Checking curl_cffi can connect like Chrome"
+step "2/5  Checking curl_cffi can connect like Chrome"
 "$PY" - <<'PYEOF'
 from curl_cffi import requests as r
 x = r.get("https://lilly.wd115.myworkdayjobs.com/CMP", impersonate="chrome", timeout=30)
@@ -27,10 +27,13 @@ print("Lilly campus board answered HTTP", x.status_code, "| server:", x.headers.
       "| Cloudflare challenge page:", "yes" if ("_cf_chl_opt" in x.text or "/orchestrate/" in x.text) else "no")
 PYEOF
 
-step "3/4  Headless Chromium for Lilly's fallback route (about 150 MB, once)"
+step "3/5  Headless Chromium for Lilly's fallback route (about 150 MB, once)"
 "$PY" -m pip install --upgrade --progress-bar on playwright
 "$PY" -m playwright install chromium
 
-step "4/4  Dry run for Eli Lilly (nothing is saved; full log in scraper/out/logs/)"
+step "4/5  Checking Claude (settings from .env.local: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION, ANTHROPIC_BEDROCK_BASE_URL)"
+"$PY" scraper/classify.py --check --classifier llm || echo "Claude isn't reachable with these settings; refreshes will use keyword rules. The error above says why."
+
+step "5/5  Dry run for Eli Lilly (nothing is saved; full log in scraper/out/logs/)"
 "$PY" scraper/pipeline.py --companies Lilly --dry-run --no-check --workers 1 || true
 step "Done. Look for 'Eli Lilly: N internship postings' above. The next Refresh uses all of this."

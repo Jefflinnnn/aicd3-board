@@ -62,6 +62,8 @@ def read_env(names: tuple[str, ...]) -> str:
 def build_records(postings: list[pi.Posting], clf: Classifier) -> tuple[list[dict], list[dict]]:
     """Import records for the app, and one report row per posting."""
     records, report = [], []
+    # Claude classifies the new or changed ones several at a time first; the loop below then reads its cache
+    clf.warm([(p.title, p.company, p.description) for p in postings if not pi.undergrad_only(p.title, p.description)])
     for p in postings:
         if pi.undergrad_only(p.title, p.description):
             # UCSF students are graduate and professional students: undergraduate-only roles and co-ops are
@@ -77,6 +79,13 @@ def build_records(postings: list[pi.Posting], clf: Classifier) -> tuple[list[dic
                        "url": p.url, "note": v.note})
         rec = pi.to_import_record(p)
         rec["category"] = v.category
+        # Claude's own reading of the posting, when it wrote one (better than heading-matching on odd formats)
+        if v.summary:
+            rec["description"] = v.summary
+        if v.resp:
+            rec["responsibilities"] = v.resp
+        if v.quals:
+            rec["qualifications"] = v.quals
         if v.decision == "skip":
             # sent along marked as not a fit: never added, and if it's already on the board the app moves it to
             # the bin (staff can restore it) instead of marking it "taken down" for not appearing in this run
@@ -88,6 +97,8 @@ def build_records(postings: list[pi.Posting], clf: Classifier) -> tuple[list[dic
                 if v.computational >= FIT_MIN else
                 f"Unsure ML or computational automation is central ({round(v.computational * 100)}% by {v.backend}; "
                 f"{round(FIT_MIN * 100)}% needed to publish)")
+            if v.backend == "llm" and v.note:
+                rec["review_reason"] += f". Claude: {v.note}"
         records.append(rec)
     return records, report
 
@@ -211,7 +222,7 @@ def main(argv: list[str] | None = None) -> int:
 def _main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--companies", nargs="+", help="subset (case-insensitive substring), default all")
-    ap.add_argument("--classifier", choices=["auto", "d3", "rules"], default="auto")
+    ap.add_argument("--classifier", choices=["auto", "llm", "d3", "rules"], default="auto")
     ap.add_argument("--url", default=os.environ.get("AICD3_URL", "http://localhost:3000"))
     ap.add_argument("--dry-run", action="store_true", help="ask the app what would change; save nothing")
     ap.add_argument("--no-check", action="store_true", help="skip re-checking open postings afterwards")

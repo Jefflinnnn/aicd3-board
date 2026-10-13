@@ -73,7 +73,13 @@ export function runnerProblem(): string | null {
 }
 
 /** Whether d3-flash is set up for refreshes, and whether this server can set it up. */
-export function classifierInfo(): { d3: boolean; revision: string; canSetup: string | null } {
+export function classifierInfo(): { llm: string; d3: boolean; revision: string; canSetup: string | null } {
+  // Claude (scraper/classify.py "llm") when its settings are in this server's environment (.env.local):
+  // Bedrock keys, optionally behind a gateway (ANTHROPIC_BEDROCK_BASE_URL), or an Anthropic API key
+  const e = process.env
+  const llm = (e.AWS_ACCESS_KEY_ID && e.AWS_SECRET_ACCESS_KEY) || e.ANTHROPIC_API_KEY
+    ? e.AICD3_LLM_MODEL || e.ANTHROPIC_DEFAULT_HAIKU_MODEL || (e.AWS_ACCESS_KEY_ID ? "us.anthropic.claude-haiku-4-5-20251001-v1:0" : "claude-haiku-4-5")
+    : ""
   const d3 = fs.existsSync(D3_OK) && fs.existsSync(VENV_PY)
   const supported = (process.platform === "darwin" && process.arch === "arm64") || WIN || process.platform === "linux"
   const canSetup = process.env.VERCEL
@@ -81,7 +87,7 @@ export function classifierInfo(): { d3: boolean; revision: string; canSetup: str
     : !supported
       ? "The d3-flash setup button works on Apple-silicon Macs and on Windows or Linux PCs with an NVIDIA GPU."
       : !fs.existsSync(SETUP) ? `scraper/${path.basename(SETUP)} is missing from this server.` : null
-  return { d3, revision: d3 ? d3Revision() : "", canSetup }
+  return { llm, d3, revision: d3 ? d3Revision() : "", canSetup }
 }
 
 function alive(pid: number | null): boolean {

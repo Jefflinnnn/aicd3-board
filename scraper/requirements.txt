@@ -3,6 +3,8 @@ beautifulsoup4>=4.12
 lxml>=5.0
 # connects like Chrome for sites behind Cloudflare bot checks (Eli Lilly's Workday); optional, but without it Lilly falls back to careers.lilly.com
 curl_cffi>=0.7
+# the llm classifier (Claude through Bedrock or the Anthropic API); without it the pipeline uses d3-flash or keyword rules
+anthropic[bedrock]>=0.40
 # optional: Eli Lilly's headless-browser fallback, and --manual-session when a site shows a "verify you are human" page
 # (pip install playwright && playwright install chromium):
 # playwright>=1.45
