@@ -159,7 +159,7 @@ export async function startRefresh(trigger: "manual" | "schedule" | "setup", req
     windowsHide: true,
   })
   const t0 = Date.now()
-  const entry: Live = { child, lines: [`[server] ${new Date(t0).toLocaleString()}: ${trigger} run started: ${cmd} ${args.map((a) => path.relative(ROOT, a) && !a.startsWith("http") && !a.startsWith("-") ? path.relative(ROOT, a) : a).join(" ")}`], flushed: 0 }
+  const entry: Live = { child, lines: [`[server] ${new Date(t0).toLocaleString()}: ${trigger} run started: ${cmd} ${args.map((a) => (a.startsWith(ROOT + path.sep) ? path.relative(ROOT, a) : a)).join(" ")}`], flushed: 0 }
   console.log(`[refresh] run ${run.id} started (${trigger}): ${cmd}`)
   live.set(run.id, entry)
   const take = (buf: Buffer) => {
