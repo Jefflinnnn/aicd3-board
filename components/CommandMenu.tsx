@@ -63,6 +63,8 @@ export function CommandMenu({ open, onOpenChange, onToggleSidebar }: { open: boo
     return () => window.removeEventListener("keydown", onKey)
   }, [open, onOpenChange, onToggleSidebar, go, me.canEdit])
 
+  // clear the search when the menu closes, however it was closed
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { if (!open) setQ("") }, [open])
   // other parts of the page (the footer) can ask for the shortcut sheet
   useEffect(() => {

@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useRef } from "react"
+import { useEffect, useLayoutEffect, useRef } from "react"
 import * as echarts from "echarts/core"
 import { BarChart, LineChart, HeatmapChart, PieChart, MapChart, ScatterChart, EffectScatterChart } from "echarts/charts"
 import {
@@ -103,10 +103,15 @@ export function EChart({
 }) {
   const ref = useRef<HTMLDivElement>(null)
   const inst = useRef<echarts.ECharts | null>(null)
+  // the latest handlers, read by the chart's own event listeners (set up once)
   const clickRef = useRef(onClick)
-  clickRef.current = onClick
   const axisRef = useRef(onAxisClick)
-  axisRef.current = onAxisClick
+  const readyRef = useRef(onReady)
+  useLayoutEffect(() => {
+    clickRef.current = onClick
+    axisRef.current = onAxisClick
+    readyRef.current = onReady
+  })
 
   useEffect(() => {
     if (!ref.current) return
@@ -125,7 +130,7 @@ export function EChart({
       if (!axisRef.current) return
       zr.setCursorStyle(c.containPixel({ gridIndex: 0 }, [e.offsetX, e.offsetY]) ? "pointer" : "default")
     })
-    onReady?.(c)
+    readyRef.current?.(c)
     const ro = new ResizeObserver(() => c.resize())
     ro.observe(ref.current)
     return () => {

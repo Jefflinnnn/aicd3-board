@@ -1,5 +1,6 @@
 "use client"
 
+import { useNow } from "@/lib/useNow"
 import { useMemo, useState } from "react"
 import { ArrowDown, ClipboardCheck, EyeOff, FileUp, Pencil, Plus, RotateCcw, Search, ShieldCheck, Trash2, Undo2 } from "lucide-react"
 import { toast } from "sonner"
@@ -45,6 +46,7 @@ function agoShort(t?: number) {
 }
 
 export default function Admin() {
+  const now = useNow()
   const app = useApp()
   const { mode, me, jobs, bin, staged, meta, allInbox, names, settings, dark, openJob, saveJobs, moveToBin, restore, deleteForever, setCustomCats, resolveInbox, resetSample, saveStaged, approve, pullToReview } = app
   const [q, setQ] = useState("")
@@ -156,7 +158,7 @@ export default function Admin() {
   const pageIds = pageRows.map((j) => j.id)
   const pageAllSel = pageIds.length > 0 && pageIds.every((id) => selected.has(id))
   const pageSomeSel = pageIds.some((id) => selected.has(id))
-  const daysLeftInBin = (t: number) => Math.max(0, BIN_DAYS - Math.floor((Date.now() - t) / 864e5))
+  const daysLeftInBin = (t: number) => Math.max(0, BIN_DAYS - Math.floor((now - t) / 864e5))
 
   const toBin = async (ids: string[]) => {
     try {
@@ -199,7 +201,7 @@ export default function Admin() {
       toast("Category removed", { description: moving.length ? `${moving.length} posting(s) moved to Other.` : undefined })
     } catch { fail() }
   }
-  const stale = meta.lastUpdated ? Date.now() - meta.lastUpdated > 2 * 864e5 : true
+  const stale = meta.lastUpdated ? now - meta.lastUpdated > 2 * 864e5 : true
 
   return (
     <div className="flex flex-col gap-5">
@@ -574,7 +576,7 @@ export default function Admin() {
         <DialogContent className="w-[calc(100vw-2rem)] max-w-md">
           <DialogHeader className="text-left">
             <DialogTitle className="font-display text-xl">Delete {purge && purge.length === 1 ? "this posting" : `${purge?.length ?? 0} postings`} for good?</DialogTitle>
-            <DialogDescription>They can't be restored after this.</DialogDescription>
+            <DialogDescription>They can’t be restored after this.</DialogDescription>
           </DialogHeader>
           <DialogFooter className="gap-2">
             <Button variant="outline" onClick={() => setPurge(null)}>Cancel</Button>

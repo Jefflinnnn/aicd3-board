@@ -109,11 +109,19 @@ export default function JobBoard() {
   useEffect(() => {
     store.set("board", { q, filters, sort, tab, pageSize, filtersV: FILTERS_V } satisfies BoardView)
   }, [q, filters, sort, tab, pageSize])
-  useEffect(() => setPage(1), [q, filters, sort, tab, pageSize])
+  // back to page 1 whenever what's listed changes (adjusted while rendering, not in an effect)
+  const listKey = JSON.stringify([q, filters, sort, tab, pageSize])
+  const [pageFor, setPageFor] = useState(listKey)
+  if (pageFor !== listKey) {
+    setPageFor(listKey)
+    setPage(1)
+  }
 
   useEffect(() => {
     if (pendingFilter || pendingTab) {
       if (pendingFilter) {
+        // a link elsewhere (a chart, the map) handed over filters; apply them once and clear the hand-off
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         setFilters({ ...EMPTY_FILTERS, ...pendingFilter })
         setQ("")
       }
@@ -344,7 +352,7 @@ export default function JobBoard() {
     <div className="flex flex-col gap-5">
       <PageHead
         title="Job board"
-        sub={<>Save roles you're interested in, then check them off once you apply.<br />Click a column to sort or filter, or a row for details. Press / to search.</>}
+        sub={<>Save roles you’re interested in, then check them off once you apply.<br />Click a column to sort or filter, or a row for details. Press / to search.</>}
         right={<Button variant="outline" onClick={() => openReport()}><Flag className="size-4" /> Report an issue</Button>}
       />
 

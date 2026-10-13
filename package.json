@@ -2,18 +2,23 @@
   "name": "aicd3-board",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": "22.x"
+  },
   "scripts": {
     "dev": "prisma generate && next dev",
     "build": "prisma generate && next build",
+    "vercel-build": "node scripts/vercel-build.mjs",
     "start": "next start",
     "lint": "eslint",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "next typegen && tsc --noEmit",
     "postinstall": "prisma generate",
     "db:migrate": "prisma migrate dev && prisma generate",
     "db:deploy": "prisma migrate deploy",
     "db:studio": "prisma studio",
     "grant-access": "tsx scripts/grant-access.ts",
-    "test": "node --conditions=react-server --import tsx --test tests/*.test.mts"
+    "test": "node --conditions=react-server --import tsx --test tests/*.test.mts",
+    "check": "pnpm typecheck && pnpm lint"
   },
   "dependencies": {
     "@neondatabase/auth": "0.5.0-beta",

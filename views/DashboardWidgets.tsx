@@ -8,7 +8,8 @@
  * - a recent-activity feed (Vercel deployments, Linear inbox)
  * - a layout each person can reorder and trim (Baseten's customizable metrics page)
  */
-import { useLayoutEffect, useRef, useState } from "react"
+import { useId, useLayoutEffect, useRef, useState } from "react"
+import { useNow } from "@/lib/useNow"
 import { ArrowDown, ArrowRight, ArrowUp, Check, EyeOff, GripVertical, Plus, RotateCcw, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
@@ -24,7 +25,7 @@ export function Sparkline({ values, className, label }: { values: number[]; clas
   const min = Math.min(0, ...values)
   const pts = values.map((v, i) => [(i / Math.max(1, values.length - 1)) * 100, 28 - ((v - min) / (max - min || 1)) * 24] as const)
   const line = pts.map(([x, y], i) => `${i ? "L" : "M"}${x.toFixed(2)},${y.toFixed(2)}`).join(" ")
-  const id = useRef("sp" + Math.random().toString(36).slice(2, 8)).current
+  const id = "sp" + useId().replace(/[^a-zA-Z0-9]/g, "")
   return (
     <svg viewBox="0 0 100 30" preserveAspectRatio="none" className={cn("h-9 w-full overflow-visible", className)} role="img" aria-label={label}>
       <defs>
@@ -223,7 +224,7 @@ export function StartCard() {
           ))}
         </ul>
       ) : (
-        <p className="py-6 text-center text-sm text-muted-foreground">Save roles with a deadline and they'll line up here.</p>
+        <p className="py-6 text-center text-sm text-muted-foreground">Save roles with a deadline and they’ll line up here.</p>
       )}
       {hidden && done < steps.length && (
         <button className="mt-auto self-start pt-2 text-xs text-muted-foreground hover:text-foreground" onClick={() => { setHidden(false); store.set("checklistHidden", false) }}>Show the getting-started list</button>
@@ -242,6 +243,7 @@ const since = (t: number) => {
   return d < 30 ? `${d}d` : `${Math.round(d / 30)}mo`
 }
 export function ActivityCard() {
+  const now = useNow()
   const { jobs, openJob, isNew } = useApp()
   const events = [
     ...jobs.map((j) => ({ j, t: j.addedAt ?? parse(j.posted).getTime() + 9 * 36e5, kind: "new" as const })),
@@ -249,7 +251,7 @@ export function ActivityCard() {
       .filter((j) => j.deadline && parse(j.deadline) < TODAY && diffDays(TODAY, parse(j.deadline)) <= 21)
       .map((j) => ({ j, t: addDays(parse(j.deadline), 1).getTime(), kind: "closed" as const })),
   ]
-    .filter((e) => e.t <= Date.now())
+    .filter((e) => e.t <= now)
     .sort((a, b) => b.t - a.t)
     .slice(0, 6)
   return (
@@ -324,8 +326,8 @@ export function Arranger({ sections, order, hidden, editing, onChange }: { secti
     ;[o[a], o[b]] = [o[b], o[a]]
     onChange(o, hidden)
   }
-  const dragOver = (overId: string, clientY: number) => {
-    if (!dragging || dragging === overId || performance.now() < settleUntil.current) return
+  const dragOver = (overId: string, clientY: number, at: number) => {
+    if (!dragging || dragging === overId || at < settleUntil.current) return
     const el = els.current[overId]
     if (!el) return
     // top half of a section: drop before it; bottom half: after it. Sections of very different
@@ -335,7 +337,7 @@ export function Arranger({ sections, order, hidden, editing, onChange }: { secti
     const o = current.filter((x) => x !== dragging)
     o.splice(o.indexOf(overId) + (before ? 0 : 1), 0, dragging)
     if (o.every((x, k) => x === current[k])) return
-    settleUntil.current = performance.now() + 340
+    settleUntil.current = at + 340
     setDraft(o)
   }
   const ended = useRef(false)   // drop and dragend both fire; save once
@@ -352,7 +354,7 @@ export function Arranger({ sections, order, hidden, editing, onChange }: { secti
         <div
           key={id}
           ref={(el) => { els.current[id] = el }}
-          onDragOver={(e) => { if (editing && dragging) { e.preventDefault(); e.dataTransfer.dropEffect = "move"; dragOver(id, e.clientY) } }}
+          onDragOver={(e) => { if (editing && dragging) { e.preventDefault(); e.dataTransfer.dropEffect = "move"; dragOver(id, e.clientY, e.timeStamp) } }}
           onDrop={(e) => { e.preventDefault(); endDrag() }}
           className={cn("relative rounded-lg transition-[box-shadow,opacity] duration-200", editing && "outline-dashed outline-1 outline-offset-[6px] outline-border", dragging === id && "opacity-50")}
         >

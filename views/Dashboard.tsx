@@ -83,6 +83,9 @@ export default function Dashboard() {
   const counts = useMemo(() => CATS.map((c) => months.map((m) => jobs.filter((j) => j.category === c.id && inMonth(j.posted, m)).length)), [jobs, months])
   const monthSeries = (op: number[]) =>
     CATS.map((c, ci) => ({ id: "m-" + c.id, data: counts[ci].map((value, i) => ({ value, itemStyle: { opacity: op[i] } })) }))
+  // the chart's starting opacities come from the highlight animation's current frame (shade), which
+  // lives in a ref so the animation can drive the chart directly without re-rendering every frame
+  /* eslint-disable react-hooks/refs */
   const monthly = useMemo(() => {
     const { base, valueAxis, catAxis } = chartBase()
     return {
@@ -103,7 +106,8 @@ export default function Dashboard() {
         data: counts[ci].map((value, i) => ({ value, itemStyle: { opacity: shade.current[i] } })),
       })),
     }
-  }, [counts, dark, months]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [counts, dark, months]) // eslint-disable-line react-hooks/exhaustive-deps -- dark: colours are read from CSS variables, which change with the theme
+  /* eslint-enable react-hooks/refs */
   useEffect(() => {
     const from = [...shade.current]
     const to = months.map((_, i) => (i === monthIdx ? 1 : DIM))
@@ -196,7 +200,7 @@ export default function Dashboard() {
         data: stack[ci],
       })),
     }
-  }, [topRows, dark])
+  }, [topRows, dark]) // eslint-disable-line react-hooks/exhaustive-deps -- dark: colours are read from CSS variables, which change with the theme
   const topSub =
     topMode === "7" ? "Postings first seen in the past 7 days"
       : topMode === "30" ? "Postings first seen in the past 30 days"

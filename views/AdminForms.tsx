@@ -22,6 +22,11 @@ type FormState = Omit<Job, "id" | "resp" | "quals"> & { resp: string; quals: str
 /** How the form was submitted: publish or hold a new posting, or save (and optionally approve) one in review. */
 export type FormAction = "save" | "hold" | "approve"
 
+/** small uppercase field label (defined once, outside the form, so React keeps the fields' state) */
+function L({ htmlFor, children }: { htmlFor: string; children: React.ReactNode }) {
+  return <Label htmlFor={htmlFor} className="text-[0.7rem] font-semibold uppercase tracking-[0.07em] text-muted-foreground">{children}</Label>
+}
+
 export function JobForm({ job, open, onOpenChange, onSave, inReview = false }: { job: Job | null; open: boolean; onOpenChange: (o: boolean) => void; onSave: (j: Partial<Job>, action: FormAction) => void; inReview?: boolean }) {
   const action = useRef<FormAction>("save")
   const init = (): FormState => {
@@ -54,10 +59,6 @@ export function JobForm({ job, open, onOpenChange, onSave, inReview = false }: {
       closed: f.closed || undefined, addedAt: job?.addedAt ?? Date.now(),
     }, action.current)
   }
-
-  const L = ({ htmlFor, children }: { htmlFor: string; children: React.ReactNode }) => (
-    <Label htmlFor={htmlFor} className="text-[0.7rem] font-semibold uppercase tracking-[0.07em] text-muted-foreground">{children}</Label>
-  )
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -184,7 +185,7 @@ export function ImportDialog({ open, onOpenChange }: { open: boolean; onOpenChan
       <DialogContent className="max-h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] max-w-3xl overflow-y-auto">
         <DialogHeader className="text-left">
           <DialogTitle className="font-display text-xl">Import postings</DialogTitle>
-          <DialogDescription>Paste the scraper's JSON or CSV, or choose a file. You'll see what changes before anything is saved.</DialogDescription>
+          <DialogDescription>Paste the scraper’s JSON or CSV, or choose a file. You’ll see what changes before anything is saved.</DialogDescription>
         </DialogHeader>
         <div className="flex flex-col gap-3">
           <div className="flex flex-wrap items-center gap-2">
@@ -224,7 +225,7 @@ export function ImportDialog({ open, onOpenChange }: { open: boolean; onOpenChan
           </div>
           <div className="flex items-center gap-2">
             <Switch id="closemissing" checked={closeMissing} onCheckedChange={setCloseMissing} />
-            <Label htmlFor="closemissing" className="text-sm font-normal">Mark live postings from these companies that aren't in this import as taken down</Label>
+            <Label htmlFor="closemissing" className="text-sm font-normal">Mark live postings from these companies that aren’t in this import as taken down</Label>
           </div>
 
           {result.error && <p className="text-sm text-destructive" role="alert">{result.error}</p>}

@@ -39,7 +39,7 @@ function Group({ title, children }: { title: string; children: React.ReactNode }
 const csvCell = (v: string) => (/[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v)
 
 export default function SettingsPage() {
-  const { settings, setSettings, jobs, mine, setStatus, mode } = useApp()
+  const { settings, setSettings, jobs, mine, setStatus } = useApp()
   const [clearOpen, setClearOpen] = useState(false)
   const [fallback, setFallback] = useState("")
   const [downloads, setDownloads] = useState<DownloadsCap | null>(null)
