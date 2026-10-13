@@ -20,6 +20,22 @@ process.env.NEON_AUTH_COOKIE_SECRET = "x".repeat(40)
 process.env.SIGN_IN_EMAIL_DOMAINS = "school.edu,program.org,gmail.com"
 process.env.AUTO_APPROVE_EMAIL_DOMAINS = "school.edu"
 process.env.SCRAPER_INGEST_TOKEN = "t".repeat(48)
+// a stand-in for `python3 scraper/pipeline.py`: prints a line, writes the summary, exits with FAKE_EXIT
+{
+  const fs = await import("node:fs")
+  const os = await import("node:os")
+  const fake = `${os.tmpdir()}/aicd3-fake-python.sh`
+  fs.writeFileSync(fake, `#!/bin/sh
+if [ "$1" = "-c" ]; then exit 0; fi
+while [ $# -gt 0 ]; do if [ "$1" = "--summary-json" ]; then out="$2"; fi; shift; done
+echo "scraping Gilead Sciences"
+sleep \${FAKE_SLEEP:-0}
+echo '{"classifier":"rules","scraped":3,"publish":1,"review":1,"skip":1,"database":{"added":1,"staged":1,"updated":0,"closed":0,"unchanged":0,"rejected":0},"errors":0,"checked":null,"companies":{"Gilead Sciences":"ok (3)"},"failed":[]}' > "$out"
+exit \${FAKE_EXIT:-0}
+`, { mode: 0o755 })
+  process.env.SCRAPER_PYTHON = fake
+  process.env.SCRAPER_SCHEDULER = "off"
+}
 
 type FakeUser = { id: string; email: string; emailVerified: boolean; name: string }
 let current: FakeUser | null = null
@@ -31,6 +47,8 @@ const user = (id: string, email: string, emailVerified = true): FakeUser => ({ i
 
 const A = await import("../lib/actions")
 const P = await import("../lib/people-actions")
+const R = await import("../lib/refresh-actions")
+const RS = await import("../lib/server/refresh")
 const { db } = await import("../lib/server/db")
 const { POST: ingest } = await import("../app/api/ingest/route")
 const authRoute = await import("../app/api/auth/[...path]/route")
@@ -47,7 +65,7 @@ const job = (id: string, extra: Record<string, unknown> = {}) => ({
 const rejects = (p: Promise<unknown>, re = /permission|approval|sign in|access/i) => assert.rejects(p, re)
 
 async function wipe() {
-  for (const t of ["JobStatus", "JobNote", "CompanyRequest", "IssueReport", "Posting", "AccessGrant", "Profile", "SiteMeta", "AuditLog"])
+  for (const t of ["ScrapeRun", "JobStatus", "JobNote", "CompanyRequest", "IssueReport", "Posting", "AccessGrant", "Profile", "SiteMeta", "AuditLog"])
     await prisma.$executeRawUnsafe(`DELETE FROM "${t}"`)
 }
 
@@ -402,3 +420,184 @@ describe("job IDs, locations and the open/closed check", () => {
   })
 })
 
+
+describe("pipeline imports", () => {
+  before(wipe)
+  const token = () => process.env.SCRAPER_INGEST_TOKEN!
+  const ingestJson = (body: unknown, qs = "?reviewAll=0&closeMissing=1") =>
+    ingest(new Request("http://localhost/api/ingest" + qs, { method: "POST", body: JSON.stringify(body), headers: { authorization: "Bearer " + token() } }))
+  const rec = (title: string, extra: Record<string, unknown> = {}) => ({
+    company: "gilead", title, category: "development", first_seen: "2026-09-08", locations: ["Foster City, CA"],
+    url: "https://gilead.wd1.myworkdayjobs.com/gileadcareers/job/x/" + encodeURIComponent(title), description: "z".repeat(120),
+    responsibilities: ["Analyze trial data"], qualifications: ["R or SAS"], ...extra,
+  })
+
+  it("publishes confident postings and sends the ones the classifier is unsure about to review", async () => {
+    const out = await (await ingestJson({ postings: [
+      rec("Intern - Development - Biostatistics", { req_id: "R0054649" }),
+      rec("Intern - Data Analytics", { req_id: "R0054650", category: "other", review_reason: "Unsure it has computational work (48% by d3; 60% needed to publish)" }),
+    ] })).json()
+    assert.equal(out.added, 1)
+    assert.equal(out.staged, 1)
+    const held = await prisma.posting.findFirst({ where: { reqId: "R0054650" } })
+    assert.equal(held?.state, "review")
+    assert.ok((held?.review as { flags: string[] }).flags.some((f) => /Unsure it has computational work \(48%/.test(f)))
+    const live = await prisma.posting.findFirst({ where: { reqId: "R0054649" } })
+    assert.equal(live?.state, "live")
+    assert.equal(live?.category, "development")
+  })
+
+  it("closes a company's postings that a later run no longer finds", async () => {
+    const out = await (await ingestJson({ postings: [rec("Intern - CFO - IT", { req_id: "R0054789", category: "tech" })] })).json()
+    assert.equal(out.added, 1)
+    assert.equal(out.closed, 1)
+    assert.equal((await prisma.posting.findFirst({ where: { reqId: "R0054649" } }))?.closed, true)
+    // the posting the classifier was unsure about isn't in this run any more: it leaves the review queue
+    assert.equal(out.dropped, 1)
+    assert.equal(await prisma.posting.count({ where: { reqId: "R0054650" } }), 0)
+  })
+
+  it("moves a published posting that's no longer a fit to the bin instead of marking it taken down", async () => {
+    const out = await (await ingestJson({ postings: [
+      rec("Intern - CFO - IT", { req_id: "R0054789", category: "tech", fit: "no" }),
+      rec("Intern - Never published", { req_id: "R0099999", fit: "no" }),
+    ] })).json()
+    assert.equal(out.unlisted, 1)
+    assert.equal(out.added + out.staged, 0)
+    assert.equal(out.closed, 0)
+    const row = await prisma.posting.findFirst({ where: { reqId: "R0054789" } })
+    assert.equal(row?.state, "bin")
+    assert.equal(row?.closed, false)
+    assert.equal(await prisma.posting.count({ where: { reqId: "R0099999" } }), 0)
+    await prisma.posting.update({ where: { id: row!.id }, data: { state: "live", deletedAt: null } }) // back for the next test
+  })
+
+  it("never clears postings staff held or pulled back, or other companies' queue", async () => {
+    const held = await prisma.posting.create({ data: {
+      id: "held1", state: "review", title: "Intern - Held", company: "gilead", location: "Foster City, CA", locations: ["Foster City, CA"],
+      category: "tech", posted: new Date("2026-09-01"), url: "https://gilead.example/held", resp: [], quals: [],
+      review: { flags: ["Held by staff for a closer look"], source: "held", at: Date.now(), status: "pending" },
+    } })
+    const other = await prisma.posting.create({ data: {
+      id: "other1", state: "review", title: "Intern - Other co", company: "amgen", location: "Thousand Oaks, CA", locations: ["Thousand Oaks, CA"],
+      category: "tech", posted: new Date("2026-09-01"), url: "https://amgen.example/x", resp: [], quals: [],
+      review: { flags: ["Unsure"], source: "import", at: Date.now(), status: "pending" },
+    } })
+    const out = await (await ingestJson({ postings: [rec("Intern - CFO - IT", { req_id: "R0054789", category: "tech" })] })).json()
+    assert.equal(out.dropped, 0)
+    assert.equal(await prisma.posting.count({ where: { id: { in: [held.id, other.id] } } }), 2)
+  })
+})
+
+describe("job data refresh", () => {
+  before(wipe)
+  const settle = async () => {
+    for (let i = 0; i < 100; i++) {
+      const r = await prisma.scrapeRun.findFirst({ orderBy: { startedAt: "desc" } })
+      if (r && r.status !== "running") return r
+      await new Promise((ok) => setTimeout(ok, 100))
+    }
+    throw new Error("run never finished")
+  }
+
+  it("only staff can start one, and two clicks start one run", async () => {
+    await prisma.profile.createMany({ data: [
+      { id: admin.id, email: admin.email, emailVerified: true, role: "admin", status: "active" },
+      { id: alice.id, email: alice.email, emailVerified: true, role: "student", status: "active" },
+    ] })
+    as(alice)
+    await rejects(R.refreshNow())
+    await rejects(R.getRefreshStatus())
+    as(admin)
+    process.env.FAKE_SLEEP = "1"
+    const [a, b] = await Promise.all([R.refreshNow(), R.refreshNow()])
+    assert.deepEqual([a.started, b.started].sort(), [false, true])
+    assert.equal(await prisma.scrapeRun.count(), 1)
+    const done = await settle()
+    assert.equal(done.status, "succeeded")
+    const st = await R.getRefreshStatus()
+    assert.equal(st.problem, null)
+    assert.equal(st.runs[0].summary?.database.added, 1)
+    assert.equal(st.runs[0].by, admin.id)
+    assert.match(st.runs[0].log, /scraping Gilead/)
+    assert.equal(await prisma.auditLog.count({ where: { action: "refresh.start" } }), 1)
+  })
+
+  it("reports partial and failed runs, and can be stopped", async () => {
+    as(admin)
+    process.env.FAKE_SLEEP = "0"
+    process.env.FAKE_EXIT = "2"
+    await R.refreshNow()
+    assert.equal((await settle()).status, "partial")
+    process.env.FAKE_EXIT = "1"
+    await R.refreshNow()
+    assert.equal((await settle()).status, "failed")
+    process.env.FAKE_EXIT = "0"
+    process.env.FAKE_SLEEP = "20"
+    await R.refreshNow()
+    assert.equal((await R.stopRefresh()).stopped, true)
+    assert.equal((await settle()).status, "cancelled")
+    process.env.FAKE_SLEEP = "0"
+  })
+
+  it("runs on its own every 2 days when turned on", async () => {
+    await prisma.scrapeRun.deleteMany()
+    as(admin)
+    assert.equal(await RS.runIfDue(), false) // off
+    await R.setAutoRefresh(true)
+    assert.equal(await RS.runIfDue(), true) // never ran: due now
+    const first = await settle()
+    assert.equal(first.trigger, "schedule")
+    assert.equal(await RS.runIfDue(), false)
+    assert.equal(await RS.runIfDue(new Date(Date.now() + 47 * 3600_000)), false)
+    assert.equal(await RS.runIfDue(new Date(Date.now() + 49 * 3600_000)), true)
+    await settle()
+    const st = await R.getRefreshStatus()
+    assert.equal(st.autoRefresh, true)
+    assert.ok(st.nextAt && st.nextAt > Date.now() + 47 * 3600_000)
+  })
+
+  it("offers the d3-flash setup only where it can run, and reports the classifier in use", async () => {
+    as(admin)
+    const st = await R.getRefreshStatus()
+    assert.equal(st.classifier.d3, false)
+    // Macs (Apple silicon), Windows and Linux can run the setup; Vercel can't
+    assert.equal(st.classifier.canSetup, null)
+    process.env.VERCEL = "1"
+    try {
+      assert.match((await R.getRefreshStatus()).classifier.canSetup ?? "", /NVIDIA GPU/)
+      await assert.rejects(R.setupClassifier(), /NVIDIA GPU/)
+    } finally {
+      delete process.env.VERCEL
+    }
+    as(alice)
+    await rejects(R.setupClassifier())
+    // once setup has finished (.venv-d3 with its python and the D3_OK marker), refreshes report d3-flash
+    const fs = await import("node:fs")
+    fs.mkdirSync(".venv-d3/bin", { recursive: true })
+    fs.writeFileSync(".venv-d3/bin/python", "")
+    fs.writeFileSync(".venv-d3/D3_REVISION", "0123456789abcdef")
+    fs.writeFileSync(".venv-d3/D3_OK", "")
+    try {
+      as(admin)
+      const after = await R.getRefreshStatus()
+      assert.deepEqual([after.classifier.d3, after.classifier.revision], [true, "0123456789abcdef"])
+    } finally {
+      fs.rmSync(".venv-d3", { recursive: true, force: true })
+    }
+  })
+
+  it("marks a run whose process died as failed, and says when this server can't run it", async () => {
+    await prisma.scrapeRun.create({ data: { trigger: "manual", pid: 2 ** 22 + 12345 } })
+    await RS.sweepDeadRuns()
+    assert.equal((await prisma.scrapeRun.findFirst({ orderBy: { startedAt: "desc" } }))?.status, "failed")
+    process.env.VERCEL = "1"
+    try {
+      assert.match(RS.runnerProblem() ?? "", /Vercel/)
+      as(admin)
+      await assert.rejects(R.refreshNow(), /Vercel/)
+    } finally {
+      delete process.env.VERCEL
+    }
+  })
+})

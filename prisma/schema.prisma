@@ -182,10 +182,41 @@ model IssueReport {
 
 /// Site-wide settings: one row, id 1.
 model SiteMeta {
-  id          Int       @id @default(1)
-  customCats  Json      @default("[]")
-  lastUpdated DateTime?
-  lastImport  Json?
+  id           Int       @id @default(1)
+  customCats   Json      @default("[]")
+  lastUpdated  DateTime?
+  lastImport   Json?
+  /// run the scraper pipeline on its own every `refreshHours` (Admin: Job data refresh)
+  autoRefresh  Boolean   @default(false)
+  refreshHours Int       @default(48)
+}
+
+enum ScrapeStatus {
+  running
+  succeeded
+  partial
+  failed
+  cancelled
+}
+
+/// One run of scraper/pipeline.py started from the Admin page or the schedule.
+model ScrapeRun {
+  id          String       @id @default(cuid())
+  /// manual | schedule
+  trigger     String
+  requestedBy String?
+  status      ScrapeStatus @default(running)
+  startedAt   DateTime     @default(now())
+  finishedAt  DateTime?
+  /// process id while running, so a run can be stopped or found dead after a restart
+  pid         Int?
+  /// counts and per-company results from the pipeline's --summary-json
+  summary     Json?
+  /// the last lines the pipeline printed
+  log         String       @default("")
+
+  @@index([startedAt])
+  @@index([status])
 }
 
 /// Who changed access or bulk-loaded postings, and when.

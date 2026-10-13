@@ -142,6 +142,10 @@ export async function loadCategories() {
 export interface ImportSummary {
   added: number; updated: number; closed: number; staged: number; restaged: number
   rejected: number; unchanged: number; errors: ImportPlan["errors"]; companies: string[]
+  /** taken out of the review queue: no longer in this import */
+  dropped: number
+  /** published postings moved to the bin as no longer a fit */
+  unlisted: number
 }
 
 export async function runImport(text: string, opts: { closeMissing: boolean; reviewAll: boolean; dryRun?: boolean }): Promise<ImportSummary> {
@@ -153,10 +157,14 @@ export async function runImport(text: string, opts: { closeMissing: boolean; rev
   const summary: ImportSummary = {
     added: plan.add.length, updated: plan.update.length, closed: plan.close.length, staged: plan.stage.length,
     restaged: plan.restage.length, rejected: plan.rejected, unchanged: plan.unchanged,
-    errors: plan.errors.slice(0, 100), companies: plan.companies,
+    errors: plan.errors.slice(0, 100), companies: plan.companies, dropped: plan.dropStale.length, unlisted: plan.unlist.length,
   }
   if (opts.dryRun) return summary
   await db().$transaction(async (tx) => {
+    if (plan.unlist.length)
+      await tx.posting.updateMany({ where: { id: { in: plan.unlist.map((j) => j.id) }, state: "live" }, data: { state: "bin", deletedAt: new Date() } })
+    if (plan.dropStale.length)
+      await tx.posting.deleteMany({ where: { id: { in: plan.dropStale.map((s) => s.id) }, state: "review" } })
     await upsertStaged(tx, [...plan.stage, ...plan.restage])
     await upsertLive(tx, [...plan.add, ...plan.update, ...plan.close])
     await touchMeta(tx, { lastImport: { at: Date.now(), added: plan.add.length, updated: plan.update.length, closed: plan.close.length } })

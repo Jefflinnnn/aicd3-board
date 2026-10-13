@@ -56,3 +56,6 @@ __pycache__/
 /.claude/
 /claude-code/
 .neon
+
+# d3-flash classifier environment (scraper/setup_d3.sh)
+/.venv-d3/

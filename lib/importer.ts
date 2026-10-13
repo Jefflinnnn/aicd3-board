@@ -22,6 +22,11 @@ export interface ImportPlan {
   restage: StagedJob[]
   /** rows matching postings staff already rejected; left alone */
   rejected: number
+  /** with closeMissing: import-flagged postings still waiting for review that this import no longer
+   *  contains (gone from the site, or no longer a fit); taken out of the queue */
+  dropStale: StagedJob[]
+  /** published postings the scraper now marks as not a fit (fit: "no"): moved to the bin, not closed */
+  unlist: Job[]
   errors: ImportRowError[]
   companies: string[]
 }
@@ -148,6 +153,8 @@ export function planImport(text: string, existing: Job[], closeMissing: boolean,
   const now = Date.now()
   const incoming: Job[] = []
   const catMiss = new Set<number>()
+  const unfit = new Set<number>() // rows marked fit: "no" by the scraper's classifier
+  const asked = new Map<number, string[]>() // rows the scraper itself sends for review (e.g. unsure it's computational)
   recs.forEach((r, i) => {
     const row = i + 1
     const title = str(pick(r, "title", "job title", "role"))
@@ -189,10 +196,14 @@ export function planImport(text: string, existing: Job[], closeMissing: boolean,
       addedAt: now,
     })
     if (!catHit) catMiss.add(incoming.length - 1)
+    const why = list(pick(r, "review_reason", "review", "flags"), /\|/).map((x) => x.slice(0, 300)).slice(0, 5)
+    if (why.length) asked.set(incoming.length - 1, why)
+    if (/^(no|false|0)$/i.test(str(pick(r, "fit")))) unfit.add(incoming.length - 1)
   })
 
   const live = matcher(existing)
   const held_ = matcher(staged)
+  const heldSeen = new Set<string>()
   const matched = new Set<string>() // existing postings this import saw
   const add: Job[] = []
   const update: Job[] = []
@@ -200,28 +211,38 @@ export function planImport(text: string, existing: Job[], closeMissing: boolean,
   const restage: StagedJob[] = []
   let rejected = 0
   let unchanged = 0
+  const unlist: Job[] = []
   const seenKeys = new Set<string>()
   incoming.forEach((n, i) => {
     const k = live.primary(n)
     if (seenKeys.has(k)) return errors.push({ row: i + 1, reason: "Duplicate of an earlier row in this import." })
     seenKeys.add(k)
     const old = live.find(n)
+    if (unfit.has(i)) {
+      // not a fit any more: take a published one off the board; one waiting in review is cleared below
+      if (old && !matched.has(old.id)) {
+        matched.add(old.id)
+        if (!old.sample) unlist.push(old)
+      }
+      return
+    }
     if (old) {
       if (matched.has(old.id)) return errors.push({ row: i + 1, reason: "Matches the same posting as an earlier row in this import." })
       matched.add(old.id)
     }
     const held = !old && held_.find(n)
+    if (held) heldSeen.add(held.id)
     if (held) {
       // already in the review queue: keep it there (or keep it rejected), refreshing its details
       if (held.review.status === "rejected") return void rejected++
-      const merged: StagedJob = { ...held, ...n, id: held.id, posted: held.posted, addedAt: held.addedAt, sample: false, review: { ...held.review, flags: reviewFlags(n, { catUnmatched: catMiss.has(i) }) } }
+      const merged: StagedJob = { ...held, ...n, id: held.id, posted: held.posted, addedAt: held.addedAt, sample: false, review: { ...held.review, flags: [...reviewFlags(n, { catUnmatched: catMiss.has(i) }), ...(asked.get(i) || [])] } }
       if (sameish(held, merged)) unchanged++
       else restage.push(merged)
       return
     }
     if (!old) {
       const fresh = { ...n, id: "j" + now.toString(36) + i.toString(36) }
-      const flags = reviewFlags(fresh, { catUnmatched: catMiss.has(i) })
+      const flags = [...reviewFlags(fresh, { catUnmatched: catMiss.has(i) }), ...(asked.get(i) || [])]
       if (flags.length || reviewAll) stage.push(toStage(fresh, flags.length ? flags : ["Every new posting in this import was sent for review"], "import"))
       else add.push(fresh)
     } else {
@@ -234,5 +255,8 @@ export function planImport(text: string, existing: Job[], closeMissing: boolean,
   const close = closeMissing
     ? existing.filter((j) => companies.includes(j.company) && !j.closed && !matched.has(j.id) && (j.deadline ? j.deadline >= iso(TODAY) : true)).map((j) => ({ ...j, closed: true }))
     : []
-  return { add, update, unchanged, close, stage, restage, rejected, errors, companies }
+  const dropStale = closeMissing
+    ? staged.filter((s) => s.review.source === "import" && s.review.status === "pending" && companies.includes(s.company) && !heldSeen.has(s.id))
+    : []
+  return { add, update, unchanged, close, stage, restage, rejected, errors, companies, dropStale, unlist }
 }

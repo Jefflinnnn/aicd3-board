@@ -1,0 +1,232 @@
+import "server-only"
+import { spawn, spawnSync, type ChildProcess } from "node:child_process"
+import fs from "node:fs"
+import os from "node:os"
+import path from "node:path"
+import { db } from "@/lib/server/db"
+import type { ScrapeRun } from "@/lib/generated/prisma/client"
+
+/**
+ * Runs the scraper pipeline (scraper/pipeline.py: scrape -> classify -> import -> re-check) as a
+ * background process of this server, for the Admin page's Refresh button and the automatic
+ * refresh. Each run is a ScrapeRun row; only one runs at a time.
+ *
+ * Needs a server that can run Python: `pnpm dev` / `pnpm start` on a Mac or Linux box with
+ * `pip install -r scraper/requirements.txt`. Serverless hosts (Vercel) can't, and say so.
+ *
+ * The same runner also does the one-time d3-flash setup (scraper/setup_d3.sh) from the Admin page.
+ * Once .venv-d3 exists, refreshes use its Python, so they classify with d3-flash, without a restart.
+ */
+
+const ROOT = process.cwd()
+const SCRIPT = path.join(ROOT, "scraper", "pipeline.py")
+const WIN = process.platform === "win32"
+const SETUP = path.join(ROOT, "scraper", WIN ? "setup_d3.ps1" : "setup_d3.sh")
+const VENV_PY = WIN ? path.join(ROOT, ".venv-d3", "Scripts", "python.exe") : path.join(ROOT, ".venv-d3", "bin", "python")
+const VENV_REV = path.join(ROOT, ".venv-d3", "D3_REVISION")
+const D3_OK = path.join(ROOT, ".venv-d3", "D3_OK")
+/** SCRAPER_PYTHON if set, else the d3 environment once setup has finished, else python3 */
+const python = () => process.env.SCRAPER_PYTHON || (fs.existsSync(D3_OK) && fs.existsSync(VENV_PY) ? VENV_PY : WIN ? "python" : "python3")
+const d3Revision = () => {
+  try { return process.env.D3_REVISION || fs.readFileSync(VENV_REV, "utf8").trim() } catch { return process.env.D3_REVISION || "" }
+}
+/** a run still "running" after this long is treated as dead */
+const STALE_MS = 6 * 3600_000
+const LOG_LINES = 60
+const CHECK_EVERY_MS = 15 * 60_000
+
+type Live = { child: ChildProcess; lines: string[]; flushed: number; stopping?: boolean }
+const g = globalThis as unknown as { __scrapeLive?: Map<string, Live>; __scrapeTimer?: NodeJS.Timeout; __pyCheck?: { at: number; problem: string | null } }
+const live = (g.__scrapeLive ??= new Map())
+
+const STALE_CLIENT = "This server is running an old Prisma client that doesn't know the refresh history table. Stop the app, run `pnpm prisma generate`, then start it again (`pnpm dev` now does this on its own)."
+const NO_TABLE = "The database doesn't have the refresh history table yet. Run `pnpm prisma migrate dev`, then restart the app."
+
+/** Why the refresh tables can't be used, or null when the error is something else. */
+export function schemaProblem(e?: unknown): string | null {
+  if (!("scrapeRun" in db())) return STALE_CLIENT
+  const code = (e as { code?: string })?.code
+  if (code === "P2021" || code === "P2022") return NO_TABLE
+  return null
+}
+
+/** Why this server can't run the scraper, or null if it can. */
+export function runnerProblem(): string | null {
+  if (process.env.VERCEL) return "This copy of the site runs on Vercel, which can't run the Python scraper. Run refreshes from a copy of the app on a computer with Python (pnpm dev or pnpm start)."
+  if (!process.env.SCRAPER_INGEST_TOKEN) return "SCRAPER_INGEST_TOKEN isn't set for this server, so the scraper can't send it postings. Add it to .env.local and restart."
+  if (!fs.existsSync(SCRIPT)) return "scraper/pipeline.py is missing from this server."
+  const now = Date.now()
+  if (!g.__pyCheck || now - g.__pyCheck.at > 5 * 60_000) {
+    const PYTHON = python()
+    const r = spawnSync(PYTHON, ["-c", "import requests, bs4, lxml"], { cwd: ROOT, timeout: 20_000, encoding: "utf8" })
+    g.__pyCheck = {
+      at: now,
+      problem: r.error
+        ? `Python (${PYTHON}) isn't installed or isn't on this server's PATH. Set SCRAPER_PYTHON to its full path.`
+        : r.status !== 0
+          ? "The scraper's Python packages are missing. Run: pip install -r scraper/requirements.txt"
+          : null,
+    }
+  }
+  return g.__pyCheck.problem
+}
+
+/** Whether d3-flash is set up for refreshes, and whether this server can set it up. */
+export function classifierInfo(): { d3: boolean; revision: string; canSetup: string | null } {
+  const d3 = fs.existsSync(D3_OK) && fs.existsSync(VENV_PY)
+  const supported = (process.platform === "darwin" && process.arch === "arm64") || WIN || process.platform === "linux"
+  const canSetup = process.env.VERCEL
+    ? "Set up d3-flash from a copy of the app running on a Mac or a PC with an NVIDIA GPU."
+    : !supported
+      ? "The d3-flash setup button works on Apple-silicon Macs and on Windows or Linux PCs with an NVIDIA GPU."
+      : !fs.existsSync(SETUP) ? `scraper/${path.basename(SETUP)} is missing from this server.` : null
+  return { d3, revision: d3 ? d3Revision() : "", canSetup }
+}
+
+function alive(pid: number | null): boolean {
+  if (!pid) return false
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === "EPERM"
+  }
+}
+
+/** Mark runs whose process is gone (server restarted, crash) as failed. */
+export async function sweepDeadRuns() {
+  const running = await db().scrapeRun.findMany({ where: { status: "running" } })
+  for (const r of running) {
+    if (live.has(r.id)) continue
+    const old = Date.now() - r.startedAt.getTime() > STALE_MS
+    if (old || !alive(r.pid)) {
+      if (old) killGroup(r.pid)
+      await db().scrapeRun.update({
+        where: { id: r.id },
+        data: { status: "failed", finishedAt: new Date(), log: (r.log + "\n[stopped: the server restarted or the run took too long]").slice(-20000) },
+      })
+    }
+  }
+}
+
+function killGroup(pid: number | null) {
+  if (!pid || !alive(pid)) return
+  if (WIN) {   // no process groups: end the process and everything it started
+    spawnSync("taskkill", ["/pid", String(pid), "/T", "/F"], { windowsHide: true })
+    return
+  }
+  try {
+    process.kill(-pid, "SIGTERM")
+  } catch {
+    try { process.kill(pid, "SIGTERM") } catch {}
+  }
+}
+
+function selfUrl() {
+  return (process.env.SCRAPER_APP_URL || `http://127.0.0.1:${process.env.PORT || 3000}`).replace(/\/$/, "")
+}
+
+/**
+ * Start a run unless one is already going. Returns the run and whether this call started it.
+ * Two clicks (or a click and the schedule) at the same moment start only one run.
+ */
+export async function startRefresh(trigger: "manual" | "schedule" | "setup", requestedBy: string | null): Promise<{ run: ScrapeRun; started: boolean }> {
+  const problem = trigger === "setup" ? classifierInfo().canSetup : runnerProblem()
+  if (problem) throw new Error(problem)
+  await sweepDeadRuns()
+  const { run, started } = await db().$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(7242001)`
+    const current = await tx.scrapeRun.findFirst({ where: { status: "running" }, orderBy: { startedAt: "desc" } })
+    if (current) return { run: current, started: false }
+    return { run: await tx.scrapeRun.create({ data: { trigger, requestedBy } }), started: true }
+  })
+  if (!started) return { run, started }
+
+  const summaryPath = path.join(os.tmpdir(), `aicd3-run-${run.id}.json`)
+  const [cmd, args] = trigger === "setup"
+    ? WIN ? ["powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", SETUP]] : ["bash", [SETUP]]
+    : [python(), [SCRIPT, "--url", selfUrl(), "--summary-json", summaryPath]]
+  const rev = d3Revision()
+  const child = spawn(cmd, args, {
+    cwd: ROOT,
+    // UTF-8 output: on Windows, Python would otherwise print through the console code page and fail on
+    // non-Latin job titles
+    env: { ...process.env, AICD3_INGEST_TOKEN: process.env.SCRAPER_INGEST_TOKEN, PYTHONUNBUFFERED: "1", PYTHONIOENCODING: "utf-8", PYTHONUTF8: "1", ...(rev ? { D3_REVISION: rev } : {}) },
+    stdio: ["ignore", "pipe", "pipe"],
+    detached: !WIN, // its own process group, so Stop ends the scraper and anything it started (Windows: taskkill /T)
+    windowsHide: true,
+  })
+  const entry: Live = { child, lines: [], flushed: 0 }
+  live.set(run.id, entry)
+  const take = (buf: Buffer) => {
+    for (const l of buf.toString("utf8").split(/\r?\n/)) if (l.trim()) entry.lines.push(l.slice(0, 400))
+    if (entry.lines.length > LOG_LINES * 4) entry.lines.splice(0, entry.lines.length - LOG_LINES)
+    if (Date.now() - entry.flushed > 10_000) {
+      entry.flushed = Date.now()
+      db().scrapeRun.update({ where: { id: run.id }, data: { log: entry.lines.slice(-LOG_LINES).join("\n") } }).catch(() => {})
+    }
+  }
+  child.stdout?.on("data", take)
+  child.stderr?.on("data", take)
+  child.on("error", (e) => entry.lines.push(`[could not start: ${e.message}]`))
+  child.on("close", async (code, signal) => {
+    live.delete(run.id)
+    let summary: unknown = null
+    try {
+      summary = JSON.parse(fs.readFileSync(summaryPath, "utf8"))
+      fs.unlinkSync(summaryPath)
+    } catch {}
+    if (trigger === "setup") g.__pyCheck = undefined // the next refresh re-checks which Python to use
+    const cancelled = entry.stopping || signal === "SIGTERM" || signal === "SIGKILL"
+    const status = cancelled ? "cancelled" : code === 0 ? "succeeded" : code === 2 && summary ? "partial" : "failed"
+    await db().scrapeRun.update({
+      where: { id: run.id },
+      data: { status, finishedAt: new Date(), pid: null, summary: summary ? JSON.parse(JSON.stringify(summary)) : undefined, log: entry.lines.slice(-LOG_LINES).join("\n") },
+    }).catch(() => {})
+  })
+  if (child.pid) await db().scrapeRun.update({ where: { id: run.id }, data: { pid: child.pid } })
+  return { run: { ...run, pid: child.pid ?? null }, started: true }
+}
+
+export async function cancelRefresh(): Promise<boolean> {
+  const run = await db().scrapeRun.findFirst({ where: { status: "running" }, orderBy: { startedAt: "desc" } })
+  if (!run) return false
+  const entry = live.get(run.id)
+  if (entry) {
+    entry.stopping = true
+    killGroup(entry.child.pid ?? null)
+    return true
+  }
+  killGroup(run.pid)
+  await db().scrapeRun.update({ where: { id: run.id }, data: { status: "cancelled", finishedAt: new Date(), pid: null } })
+  return true
+}
+
+/** When the next automatic run is due (null when automatic refresh is off). */
+export async function nextScheduled(): Promise<Date | null> {
+  const meta = await db().siteMeta.findUnique({ where: { id: 1 } })
+  if (!meta?.autoRefresh) return null
+  const last = await db().scrapeRun.findFirst({ where: { trigger: { in: ["manual", "schedule"] }, status: { in: ["succeeded", "partial", "running"] } }, orderBy: { startedAt: "desc" } })
+  return last ? new Date(last.startedAt.getTime() + meta.refreshHours * 3600_000) : new Date(0) // never ran: due now
+}
+
+export async function runIfDue(now = new Date()): Promise<boolean> {
+  if (runnerProblem()) return false
+  await sweepDeadRuns()
+  const due = await nextScheduled()
+  if (!due || due > now) return false
+  // a failed run is retried at the next check, but not more than every 6 hours
+  const lastTry = await db().scrapeRun.findFirst({ where: { trigger: "schedule" }, orderBy: { startedAt: "desc" } })
+  if (lastTry && lastTry.status === "failed" && now.getTime() - lastTry.startedAt.getTime() < 6 * 3600_000) return false
+  const { started } = await startRefresh("schedule", null)
+  return started
+}
+
+/** Called once per server start (instrumentation.ts): checks every 15 minutes whether a run is due. */
+export function startScheduler() {
+  if (g.__scrapeTimer || process.env.VERCEL || process.env.SCRAPER_SCHEDULER === "off") return
+  const tick = () => runIfDue().catch((e) => console.error("[refresh] scheduled check failed:", schemaProblem(e) ?? (e instanceof Error ? e.message : e)))
+  g.__scrapeTimer = setInterval(tick, CHECK_EVERY_MS)
+  g.__scrapeTimer.unref?.()
+  setTimeout(tick, 60_000).unref?.()
+}

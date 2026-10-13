@@ -55,3 +55,37 @@ export interface Person {
   createdAt: number
 }
 export interface Invite { email: string; role: Role; createdAt: number }
+
+/** One run of the scraper pipeline (Admin: Job data refresh). */
+export interface RefreshRun {
+  id: string
+  trigger: "manual" | "schedule" | "setup"
+  status: "running" | "succeeded" | "partial" | "failed" | "cancelled"
+  startedAt: number
+  finishedAt: number | null
+  by: string | null
+  summary: {
+    classifier: string
+    scraped: number
+    publish: number
+    review: number
+    skip: number
+    database: { added: number; staged: number; updated: number; closed: number; unchanged: number; rejected: number; dropped?: number; unlisted?: number }
+    errors: number
+    checked: { open: number; closed: number; unknown: number } | null
+    companies: Record<string, string>
+    failed: string[]
+  } | null
+  /** the last lines the pipeline printed */
+  log: string
+}
+export interface RefreshStatus {
+  /** why this server can't run the scraper, or null */
+  problem: string | null
+  autoRefresh: boolean
+  everyHours: number
+  nextAt: number | null
+  runs: RefreshRun[]
+  /** which classifier refreshes use; canSetup is why this server can't set up d3-flash, or null */
+  classifier: { d3: boolean; revision: string; canSetup: string | null }
+}

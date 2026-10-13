@@ -78,6 +78,25 @@ Manage people on **Admin → People & access**. An invite by email takes effect 
   TEST_DATABASE_URL=postgresql://localhost/aicd3_test pnpm test
   ```
 
+## Loading postings
+
+**From the Admin page.** **Job data refresh** has a **Refresh now** button and a switch for **Refresh automatically every 2 days**. The app's own server runs the pipeline below in the background (a full run takes 10–30 minutes; you can leave the page), shows its progress and keeps a history of runs with what each one changed. This needs a server that can run Python, i.e. the app started with `pnpm dev` or `pnpm build && pnpm start` on your Mac or another computer, with `pip install -r scraper/requirements.txt` done and `SCRAPER_INGEST_TOKEN` set. The automatic refresh only happens while that server is running. On Vercel the panel explains that it can't run there. If Python isn't plain `python3` (for example a virtualenv), set `SCRAPER_PYTHON` to its path.
+
+**From a terminal**, the same pipeline:
+
+```bash
+pip install -r scraper/requirements.txt
+python3 scraper/pipeline.py --dry-run   # what would change; nothing saved
+python3 scraper/pipeline.py             # scrape, classify, load into the database, re-check open postings
+```
+
+It needs the app running (`pnpm dev`, or `--url https://your-app`) and `SCRAPER_INGEST_TOKEN` in `.env.local` (any long random value, e.g. `openssl rand -hex 32`; restart the app after adding it). It scrapes every company's US internships, then asks two questions of each posting (`scraper/classify.py`):
+
+- **Is there real computational work?** (programming, data analysis, statistics, ML/AI, bioinformatics, modeling, building tools). Confident yes: published. Unsure: sent to the staff review queue with the model's confidence. No: left out.
+- **Which area?** Drug discovery (before clinical trials), drug development (during clinical trials), tech (not tied to a drug stage), or other. This becomes the posting's category.
+
+The classifier is [vllm-sr/d3-flash](https://huggingface.co/vllm-sr/d3-flash), a 9B decision model run locally with `transformers` (install the commented packages in `scraper/requirements.txt`; it needs an NVIDIA GPU or an Apple-silicon Mac with about 20 GB of free memory, and downloads about 17 GB on first use). The Admin page's **Set up d3-flash** button (or `bash scraper/setup_d3.sh` on a Mac or Linux, `powershell -ExecutionPolicy Bypass -File scraper\setup_d3.ps1` on Windows) does all of it in one go, on an Apple-silicon Mac or a PC with an NVIDIA GPU (20 GB or more): it builds a separate Python environment (`.venv-d3`), installs the packages, downloads the model, classifies a sample, and points the Refresh button at that environment (`SCRAPER_PYTHON` and a pinned `D3_REVISION` in `.env.local`). Docker isn't used for this because containers on a Mac can't reach its GPU. `python3 scraper/classify.py --check` loads the model and classifies one sample. If it can't load, the pipeline falls back to keyword rules and says so. Every run writes `scraper/out/pipeline/fit.csv` listing each posting, the decision and the confidence.
+
 ## Refreshing postings with Claude Code
 
 The `/scrape-internships` skill and the `posting-extractor` subagent live in your local `.claude/` folder, which isn't committed. Run it from the repository root in the Claude Code CLI:
