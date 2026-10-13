@@ -1,7 +1,8 @@
 /**
  * Vercel's build (package.json "vercel-build"). On a production deploy, applies any new database
  * migrations before building, so new code never goes live against an old schema. Preview deploys
- * and local builds skip it: they must never change the production database.
+ * and local builds skip it: they must never change the production database. So does the public demo
+ * (DEMO_MODE=1), which has no database at all.
  *
  * Needs DATABASE_URL_UNPOOLED (Neon's direct connection) in Vercel's Production environment variables.
  * Migrations should only add things (new tables, new nullable or defaulted columns); if a build fails
@@ -33,9 +34,14 @@ export function cleanDbUrl(name, raw) {
 }
 
 if (process.argv[1] && import.meta.url.endsWith(process.argv[1].split("/").pop())) {
-  if (process.env.VERCEL_ENV === "production") {
+  if (process.env.DEMO_MODE === "1") {
+    // the public demo has no database by design (README: Public demo)
+    console.log("Skipping database migrations: this is the public demo (DEMO_MODE=1), which has no database.")
+  } else if (process.env.VERCEL_ENV === "production") {
     if (!process.env.DATABASE_URL_UNPOOLED) {
-      console.error("DATABASE_URL_UNPOOLED isn't set for Production in Vercel, so migrations can't run. Add it (Neon's direct connection string) and redeploy.")
+      console.error("DATABASE_URL_UNPOOLED isn't available to this Production build, so migrations can't run. In this Vercel project's " +
+        "Settings > Environment Variables, add it (Neon's direct connection string, no quotes) with the Production environment ticked, " +
+        "then redeploy. If this project is the public demo, set DEMO_MODE=1 instead.")
       process.exit(1)
     }
     const { url, problem } = cleanDbUrl("DATABASE_URL_UNPOOLED", process.env.DATABASE_URL_UNPOOLED)
