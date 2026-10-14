@@ -57,6 +57,20 @@ export interface Person {
 }
 export interface Invite { email: string; role: Role; createdAt: number }
 
+/** Live progress the pipeline reports while it runs (scraper/progress.py), drawn as the refresh Sankey. */
+export interface RunProgress {
+  /** when the pipeline last reported (ms) */
+  at: number
+  host: string
+  dryRun?: boolean
+  step: "scrape" | "classify" | "import" | "check" | "done"
+  classifier: string
+  companies: { name: string; state: "waiting" | "running" | "done" | "failed"; found: number | null; note: string }[]
+  classify: { done: number; total: number }
+  outcome: { publish: number; review: number; skip: number; undergrad: number; not_us: number } | null
+  checked: { open: number; closed: number; unknown: number } | null
+}
+
 /** One run of the scraper pipeline (Admin: Job data refresh). */
 export interface RefreshRun {
   id: string
@@ -73,10 +87,14 @@ export interface RefreshRun {
     skip: number
     /** undergraduate-only roles and co-ops left out (runs before this was tracked lack it) */
     undergrad?: number
+    /** left out by d3 as outside the US */
+    not_us?: number
+    /** a dry run: the counts are what would have changed */
+    dryRun?: boolean
     database: { added: number; staged: number; updated: number; closed: number; unchanged: number; rejected: number; dropped?: number; unlisted?: number }
     errors: number
     checked: { open: number; closed: number; unknown: number } | null
-    /** why Claude wasn't used for this run (off the UCSF VPN, failed calls...), when it was set up */
+    /** why the model classifier wasn't used for (some of) this run: the d3 server not answering, failed requests... */
     classifierNote?: string
     /** why re-checking open postings stopped, when it did (the import before it was still saved) */
     checkError?: string | null
@@ -85,6 +103,8 @@ export interface RefreshRun {
   } | null
   /** the last lines the pipeline printed */
   log: string
+  /** what the pipeline reported as it went (runs before this was added, and setup runs, have none) */
+  progress: RunProgress | null
 }
 export interface RefreshStatus {
   /** why this server can't run the scraper, or null */
@@ -93,7 +113,9 @@ export interface RefreshStatus {
   everyHours: number
   nextAt: number | null
   runs: RefreshRun[]
-  /** which classifier refreshes use; canSetup is why this server can't set up d3-flash, or null */
-  /** llm: the Claude model refreshes use ("" when not configured); canSetup is why this server can't set up d3-flash, or null */
-  classifier: { llm: string; d3: boolean; revision: string; canSetup: string | null }
+  /**
+   * Which classifier refreshes use. d3: set up on this server; server: whether its model server answers
+   * (up) and what it runs, or the address it was looked for at; canSetup: why this server can't set up d3, or null.
+   */
+  classifier: { d3: boolean; revision: string; server: { up: boolean; detail: string }; canSetup: string | null }
 }

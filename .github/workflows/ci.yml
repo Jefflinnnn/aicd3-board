@@ -66,4 +66,4 @@ jobs:
       - run: pip install -r scraper/requirements.txt
       - name: Unit tests
         working-directory: scraper
-        run: python -m unittest test_pharma_internships test_extract test_check_open test_pipeline
+        run: python -m unittest test_pharma_internships test_extract test_check_open test_pipeline test_d3 test_progress
