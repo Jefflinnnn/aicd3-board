@@ -2,6 +2,8 @@
 
 Internship postings from pharma, biotech and startup companies, tracked for AICD3 students: a dashboard, a filterable job board, company info, and a staff-only admin area with a review queue.
 
+**Live demo: [aicd3-board-demo.vercel.app](https://aicd3-board-demo.vercel.app/)**, no sign-in needed. It's the full app (dashboard, job board, company info and the staff admin area with its review queue) running on made-up postings from made-up companies (Company A, Company B…). Anything you change stays in your own browser. The real board is for UCSF students and needs a UCSF sign-in; see [Public demo](#public-demo) for how the demo is deployed.
+
 - **Sign-in:** UCSF email (`@ucsf.edu`) and password, through Neon Auth. A new account confirms its address once with an emailed code; "Forgot your password, or never set one?" and "Email me a sign-in code instead" also use codes. No other addresses and no Google sign-in. New accounts wait for staff approval unless they were invited or you turn on auto-approval.
 - **Data:** Postgres on Neon through Prisma. All of it is read and written by this app's server code, which checks the person's role on every call.
 - **Postings:** the scraper in `scraper/` collects them. Claude Code summarizes them with the `/scrape-internships` skill, and new ones go into the staff review queue.
