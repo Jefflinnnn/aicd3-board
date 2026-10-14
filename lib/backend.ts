@@ -20,6 +20,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useRouter } from "next/navigation"
 import * as api from "./actions"
+import { reloadIfStale } from "./stale"
 import { BIN_DAYS, seedJobs, setCustomCategories, store, switchToDemoCompanies, type BinItem, type Category, type CompanyRequest, type IssueReport, type Job, type StagedJob } from "./data"
 import { seedStaged, unstage } from "./review"
 import type { DashLayout, InboxDoc, LoadResult, Me, Meta, Mine, Mode, MyStatus } from "./types"
@@ -122,8 +123,8 @@ export function useBackend() {
   const reload = useCallback(async () => {
     try {
       apply(await api.loadState({ refresh: true }), false)
-    } catch {
-      /* keep what's on screen */
+    } catch (e) {
+      reloadIfStale(e)   // a newer version was deployed: load it; otherwise keep what's on screen
     }
   }, [apply])
 
@@ -131,8 +132,11 @@ export function useBackend() {
     let cancelled = false
     api.loadState().then(
       (r) => { if (!cancelled) apply(r, true) },
-      () => { if (!cancelled) setMode("unavailable") }
+      (e) => { if (!cancelled && !reloadIfStale(e)) setMode("unavailable") }
     )
+    // any other server call from a tab left open across a deploy (People, Refresh...): load the new version
+    const onRejection = (ev: PromiseRejectionEvent) => { if (reloadIfStale(ev.reason)) ev.preventDefault() }
+    window.addEventListener("unhandledrejection", onRejection)
     // pick up other people's changes when the tab comes back into view
     const onFocus = () => {
       if (modeRef.current === "cloud" && !pending.current && Date.now() - lastLoad.current > REFRESH_MS) reload()
@@ -143,6 +147,7 @@ export function useBackend() {
       cancelled = true
       window.removeEventListener("focus", onFocus)
       document.removeEventListener("visibilitychange", onFocus)
+      window.removeEventListener("unhandledrejection", onRejection)
     }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -155,7 +160,7 @@ export function useBackend() {
     chain.current = next
     return next.then(
       (v) => { pending.current--; return v },
-      (e) => { pending.current--; reload(); throw e }
+      (e) => { pending.current--; if (!reloadIfStale(e)) reload(); throw e }
     )
   }, [reload])
 

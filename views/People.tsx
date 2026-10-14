@@ -13,6 +13,7 @@ import { Segmented } from "@/components/Segmented"
 import { cn } from "@/lib/utils"
 import { isEmail } from "@/lib/validate"
 import { useApp } from "@/lib/state"
+import { reloadIfStale } from "@/lib/stale"
 import { invite, listPeople, removePerson, revokeInvite, setAccess, setStudentsAccess } from "@/lib/people-actions"
 import type { Invite, Person, Role } from "@/lib/types"
 
@@ -48,8 +49,8 @@ export function People({ flash }: { flash?: boolean }) {
         setInvites(r.invites)
         setViewerRole(r.viewerRole)
       },
-      () => {
-        if (off) return
+      (e) => {
+        if (off || reloadIfStale(e)) return
         setPeople([])
         toast("Couldn't load the people list.")
       }
@@ -63,6 +64,7 @@ export function People({ flash }: { flash?: boolean }) {
       await fn()
       toast(ok)
     } catch (e) {
+      if (reloadIfStale(e)) return
       toast("That didn't work.", { description: e instanceof Error && e.message && !/server components render/i.test(e.message) ? e.message : "Check that you have permission, then try again." })
     } finally {
       setBusy(false)
