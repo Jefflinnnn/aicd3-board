@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label"
 import { Panel } from "@/components/common"
 import { cn } from "@/lib/utils"
 import { useApp } from "@/lib/state"
+import { reloadIfStale } from "@/lib/stale"
 import { getRefreshStatus, refreshNow, setAutoRefresh, setupClassifier, stopRefresh } from "@/lib/refresh-actions"
 import type { RefreshRun, RefreshStatus } from "@/lib/types"
 
@@ -57,13 +58,13 @@ export function Refresh() {
       }
       wasRunning.current = running
   }, [reload])
-  const load = useCallback(() => getRefreshStatus().then(apply, () => {}), [apply])
+  const load = useCallback(() => getRefreshStatus().then(apply, reloadIfStale), [apply])
 
   const running = st?.runs[0]?.status === "running"
   useEffect(() => {
     if (mode !== "cloud") return
-    getRefreshStatus().then(apply, () => {})
-    const id = window.setInterval(() => getRefreshStatus().then(apply, () => {}), running ? 5_000 : 60_000)
+    getRefreshStatus().then(apply, reloadIfStale)
+    const id = window.setInterval(() => getRefreshStatus().then(apply, reloadIfStale), running ? 5_000 : 60_000)
     return () => window.clearInterval(id)
   }, [mode, apply, running])
 
@@ -91,6 +92,7 @@ export function Refresh() {
       await fn()
       if (ok) toast(ok)
     } catch (e) {
+      if (reloadIfStale(e)) return
       toast("That didn't work.", { description: e instanceof Error && e.message && !/server components render/i.test(e.message) ? e.message : "Check that you have permission, then try again." })
     } finally {
       setBusy(false)
