@@ -93,6 +93,10 @@ model Posting {
   /// null = rolling
   deadline  DateTime?    @db.Date
   term      String       @default("")
+  /// earliest and latest month (1-12) the internship can start, read from the posting's text; null when it
+  /// doesn't say ("10-12 weeks between May and August" is 5 to 7)
+  startFrom Int?
+  startTo   Int?
   mode      String       @default("Onsite")
   pay       String       @default("")
   url       String

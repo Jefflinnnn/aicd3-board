@@ -6,6 +6,7 @@ import { toast } from "sonner"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
+import { Switch } from "@/components/ui/switch"
 import { Segmented } from "@/components/Segmented"
 import { Pager } from "@/components/Pager"
 import {
@@ -14,18 +15,19 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { CatChip, DeadlineCell, LocationCell, NewBadge, PageHead, StatusPill } from "@/components/common"
-import { BAY_AREA, DEFAULT_FILTERS, EMPTY_FILTERS, STATE_PREFIX, SORT_PRESETS, useApp, type DeadlineFilter, type JobFilters, type SortKey, type SortSpec, type StatusFilter } from "@/lib/state"
-import { CATS, COMPANIES, TYPES, catById, coById, daysLeft, fmt, isLive, isBayArea, jobLocations, milesFromHome, parse, store, type Job } from "@/lib/data"
+import { BAY_AREA, DEFAULT_FILTERS, EMPTY_FILTERS, START_UNKNOWN, STATE_PREFIX, SORT_PRESETS, useApp, type DeadlineFilter, type JobFilters, type PostedFilter, type SortKey, type SortSpec, type StatusFilter } from "@/lib/state"
+import { CATS, COMPANIES, MONTH_NAMES, TYPES, ageDays, applyBy, canStartIn, catById, coById, daysLeft, fmt, isLive, isBayArea, jobLocations, milesFromHome, parse, store, type Job } from "@/lib/data"
 import type { MyStatus } from "@/lib/backend"
 import { cn } from "@/lib/utils"
 
 /* ---------- filter vocabulary ---------- */
-type ListProp = "company" | "location" | "category" | "type"
+type ListProp = "company" | "location" | "category" | "type" | "start"
 type Tab = "todo" | "saved" | "done"
 
-const PROP_LABEL: Record<ListProp | "deadline" | "status", string> = {
-  company: "Company", location: "Location", category: "Category", type: "Company type", deadline: "Deadline", status: "Status",
+const PROP_LABEL: Record<ListProp | "deadline" | "posted" | "status", string> = {
+  company: "Company", location: "Location", category: "Category", type: "Company type", start: "Start month", deadline: "Deadline", posted: "Posted", status: "Status",
 }
+const POSTED_OPTS: [PostedFilter, string][] = [["", "Any time"], ["3", "Past 3 days"], ["7", "Past 7 days"], ["14", "Past 14 days"], ["30", "Past 30 days"]]
 const DEADLINE_OPTS: [DeadlineFilter, string][] = [["", "Any time"], ["week", "Closes within 7 days"], ["14", "Closes within 14 days"], ["30", "Closes within 30 days"], ["rolling", "Rolling only"]]
 const STATUS_OPTS: [StatusFilter, string][] = [["live", "Live"], ["expired", "Expired or taken down"], ["all", "Everything"]]
 const presetOf = (id: string): SortSpec => (SORT_PRESETS.find((p) => p.id === id) || SORT_PRESETS[0]).sort
@@ -93,12 +95,16 @@ function RadioOptions<T extends string>({ label, value, options, onChange }: { l
 
 /* ---------- the board ---------- */
 export default function JobBoard() {
-  const { jobs, mine, applied, saved, setStatus, openJob, openReport, settings, pendingFilter, pendingTab, clearPendingFilter, isNew } = useApp()
+  const { jobs, mine, applied, saved, setStatus, openJob, openReport, settings, setSettings, pendingFilter, pendingTab, clearPendingFilter, isNew } = useApp()
   const remembered = store.get<Partial<BoardView>>("board", {})
+  // the default view (Bay Area, discovery and development) unless this person turned it off in Settings
+  const defaults = settings.defaultView ? DEFAULT_FILTERS : EMPTY_FILTERS
+  const rememberedFilters = remembered.filtersV === FILTERS_V && remembered.filters ? { ...EMPTY_FILTERS, ...remembered.filters } : null
   // arriving from a link elsewhere (a chart, the map): start with its filters so nothing flips after the page appears
   const [q, setQ] = useState(pendingFilter ? "" : remembered.q ?? "")
   const [filters, setFilters] = useState<JobFilters>(
-    pendingFilter ? { ...EMPTY_FILTERS, ...pendingFilter } : remembered.filtersV === FILTERS_V && remembered.filters ? { ...EMPTY_FILTERS, ...remembered.filters } : { ...DEFAULT_FILTERS }
+    pendingFilter ? { ...EMPTY_FILTERS, ...pendingFilter }
+      : rememberedFilters && !(!settings.defaultView && sameFilters(rememberedFilters, DEFAULT_FILTERS)) ? rememberedFilters : { ...defaults }
   )
   const [sort, setSort] = useState<SortSpec>(remembered.sort || presetOf(settings.sort))
   const [tab, setTab] = useState<Tab>(pendingTab || (pendingFilter ? "todo" : remembered.tab || "todo"))
@@ -160,6 +166,7 @@ export default function JobBoard() {
     })(),
     category: CATS.map((c) => [c.id, c.label] as [string, string]),
     type: TYPES.map((t) => [t, t] as [string, string]),
+    start: [...MONTH_NAMES.map((m, i) => [String(i + 1), m] as [string, string]), [START_UNKNOWN, "Not stated"] as [string, string]],
   }), [jobs])
 
   const list = useMemo(() => {
@@ -175,6 +182,8 @@ export default function JobBoard() {
       if (filters.location.length && !jobLocations(j).some((l) => filters.location.some((v) => locMatch(v, l)))) return false
       if (filters.category.length && !filters.category.includes(j.category)) return false
       if (filters.type.length && !filters.type.includes(c.type)) return false
+      if (filters.start.length && !filters.start.some((m) => (m === START_UNKNOWN ? !j.startFrom : canStartIn(j, Number(m))))) return false
+      if (filters.posted && ageDays(j) > Number(filters.posted)) return false
       const live = isLive(j)
       // saved and applied roles stay visible after they close, so students can track them
       const mineToo = tab !== "todo"
@@ -226,9 +235,14 @@ export default function JobBoard() {
     .sort((a, b) => (daysLeft(a) as number) - (daysLeft(b) as number))
 
   const activeList = (Object.keys(options) as ListProp[]).filter((p) => filters[p].length)
-  const anyFilter = !!(q || !sameFilters(filters, DEFAULT_FILTERS))
-  const resetAll = () => { setQ(""); setFilters({ ...DEFAULT_FILTERS }) }
-  const onDefaults = !q && sameFilters(filters, DEFAULT_FILTERS)
+  const anyFilter = !!(q || !sameFilters(filters, defaults))
+  const resetAll = () => { setQ(""); setFilters({ ...defaults }) }
+  const onDefaults = settings.defaultView && !q && sameFilters(filters, DEFAULT_FILTERS)
+  const setDefaultView = (on: boolean) => {
+    setSettings({ defaultView: on })
+    setQ("")
+    setFilters({ ...(on ? DEFAULT_FILTERS : EMPTY_FILTERS) })
+  }
   const showAll = () => { setQ(""); setFilters({ ...EMPTY_FILTERS }) }
 
   const chipText = (p: ListProp) => {
@@ -365,7 +379,7 @@ export default function JobBoard() {
               {urgent.map((j) => (
                 <li key={j.id}>
                   <button className="text-left hover:underline" onClick={() => openJob(j.id)}>
-                    {j.title}, {coById(j.company).name}: {daysLeft(j) === 0 ? "closes today" : `closes ${fmt(j.deadline)} (${daysLeft(j)} day${daysLeft(j) === 1 ? "" : "s"})`}
+                    {j.title}, {coById(j.company).name}: {daysLeft(j) === 0 ? "last day to apply is today" : `apply by ${fmt(applyBy(j))} (${daysLeft(j)} day${daysLeft(j) === 1 ? "" : "s"} left)`}
                   </button>
                 </li>
               ))}
@@ -425,6 +439,16 @@ export default function JobBoard() {
               </span>
             ))}
 
+            {filters.posted && (
+              <span className={chipCls}>
+                <DropdownMenu>
+                  <DropdownMenuTrigger className={chipBtn}><span className="text-muted-foreground">Posted:</span> {POSTED_OPTS.find((d) => d[0] === filters.posted)?.[1]}</DropdownMenuTrigger>
+                  <DropdownMenuContent align="start" className="w-56"><RadioOptions label="Posted" value={filters.posted} options={POSTED_OPTS} onChange={(v) => setF({ posted: v })} /></DropdownMenuContent>
+                </DropdownMenu>
+                <button className={xBtn} aria-label="Remove posted filter" onClick={() => setF({ posted: "" })}><X className="size-3.5" /></button>
+              </span>
+            )}
+
             {filters.deadline && (
               <span className={chipCls}>
                 <DropdownMenu>
@@ -455,12 +479,28 @@ export default function JobBoard() {
                   <DropdownMenuSubTrigger>Deadline</DropdownMenuSubTrigger>
                   <DropdownMenuSubContent className="w-56"><RadioOptions label="Closes" value={filters.deadline} options={DEADLINE_OPTS} onChange={(v) => setF({ deadline: v })} /></DropdownMenuSubContent>
                 </DropdownMenuSub>
+                <DropdownMenuSub>
+                  <DropdownMenuSubTrigger>Posted</DropdownMenuSubTrigger>
+                  <DropdownMenuSubContent className="w-56"><RadioOptions label="Posted" value={filters.posted} options={POSTED_OPTS} onChange={(v) => setF({ posted: v })} /></DropdownMenuSubContent>
+                </DropdownMenuSub>
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
 
           {/* fixed summary: stays put however many filter chips wrap on the left */}
           <div className="flex h-8 shrink-0 items-center gap-2 text-sm text-muted-foreground">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <label className="inline-flex cursor-pointer items-center gap-2 whitespace-nowrap rounded-md px-1.5">
+                  <Switch checked={settings.defaultView} onCheckedChange={setDefaultView} aria-describedby="default-view-help" />
+                  Default view
+                </label>
+              </TooltipTrigger>
+              <TooltipContent id="default-view-help" className="max-w-xs">
+                {settings.defaultView ? "On: the board starts with live drug discovery and development roles in the Bay Area. Turn off to start with every role." : "Off: the board starts with every role. Turn on to start with live drug discovery and development roles in the Bay Area."}
+              </TooltipContent>
+            </Tooltip>
+            <span aria-hidden className="h-3.5 w-px bg-border" />
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="ghost" size="sm" className="h-8 gap-1 text-muted-foreground">
@@ -485,7 +525,7 @@ export default function JobBoard() {
             <p className="px-4 py-14 text-center text-sm text-muted-foreground">
               {tab === "done" && !applied.size ? "Roles you mark as applied show up here." : tab === "saved" && !saved.size ? "Save roles with the bookmark to come back to them." : "No postings match these filters."}
               {onDefaults ? (
-                <> These are discovery and development roles in California. <button className="text-primary hover:underline" onClick={showAll}>Show every role</button></>
+                <> This is the default view: drug discovery and development roles in the Bay Area. <button className="text-primary hover:underline" onClick={showAll}>Show every role</button> or <button className="text-primary hover:underline" onClick={() => setDefaultView(false)}>turn the default view off</button></>
               ) : (
                 <> <button className="text-primary hover:underline" onClick={resetAll}>Reset filters</button> or <button className="text-primary hover:underline" onClick={showAll}>show every role</button></>
               )}

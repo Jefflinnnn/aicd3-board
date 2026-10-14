@@ -16,7 +16,7 @@ import { cn } from "@/lib/utils"
 import { useApp } from "@/lib/state"
 import { DEFAULT_SETTINGS } from "@/lib/state"
 import {
-  CATS, ROLLING_DAYS, TODAY, addDays, coById, daysLeft, diffDays, fmt, isLive, parse, store, type Job,
+  CATS, ROLLING_DAYS, TODAY, addDays, coById, daysLeft, diffDays, fmt, isLive, lastDay, parse, store, type Job,
 } from "@/lib/data"
 
 /* ---------- sparkline ---------- */
@@ -43,7 +43,7 @@ export function Sparkline({ values, className, label }: { values: number[]; clas
 
 /* ---------- KPI band ---------- */
 const liveOn = (j: Job, d: Date) =>
-  !j.closed && parse(j.posted) <= d && (j.deadline ? parse(j.deadline) >= d : diffDays(d, parse(j.posted)) <= ROLLING_DAYS)
+  !j.closed && parse(j.posted) <= d && (j.deadline ? (lastDay(j) as Date) >= d : diffDays(d, parse(j.posted)) <= ROLLING_DAYS)
 const WEEKS = 12
 
 export function KpiBand() {
@@ -53,7 +53,7 @@ export function KpiBand() {
   const newSeries = ends.map((d) => jobs.filter((j) => { const p = parse(j.posted); return p <= d && diffDays(d, p) < 7 }).length)
   const expSeries = ends.map((d) => jobs.filter((j) => parse(j.posted) <= d && !liveOn(j, d)).length)
   const ahead = Array.from({ length: 8 }, (_, i) => addDays(TODAY, 7 * i))
-  const closeSeries = ahead.map((d) => jobs.filter((j) => isLive(j) && j.deadline && parse(j.deadline) >= d && diffDays(parse(j.deadline), d) < 7).length)
+  const closeSeries = ahead.map((d) => jobs.filter((j) => isLive(j) && j.deadline && (lastDay(j) as Date) >= d && diffDays(lastDay(j) as Date, d) < 7).length)
   const soon = jobs.filter((j) => isLive(j) && j.deadline && (daysLeft(j) as number) <= settings.soonDays).sort((a, b) => a.deadline.localeCompare(b.deadline))
   const last = (a: number[]) => a[a.length - 1]
   const prev = (a: number[]) => a[a.length - 2]
@@ -248,8 +248,8 @@ export function ActivityCard() {
   const events = [
     ...jobs.map((j) => ({ j, t: j.addedAt ?? parse(j.posted).getTime() + 9 * 36e5, kind: "new" as const })),
     ...jobs
-      .filter((j) => j.deadline && parse(j.deadline) < TODAY && diffDays(TODAY, parse(j.deadline)) <= 21)
-      .map((j) => ({ j, t: addDays(parse(j.deadline), 1).getTime(), kind: "closed" as const })),
+      .filter((j) => j.deadline && parse(j.deadline) <= TODAY && diffDays(TODAY, parse(j.deadline)) <= 21)
+      .map((j) => ({ j, t: parse(j.deadline).getTime(), kind: "closed" as const })),
   ]
     .filter((e) => e.t <= now)
     .sort((a, b) => b.t - a.t)

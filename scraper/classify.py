@@ -73,17 +73,21 @@ UNDERGRAD_SKIP = 0.6   # at or above: left out
 UNDERGRAD_REVIEW = 0.4  # between this and UNDERGRAD_SKIP: staff decide
 US_SKIP = 0.3          # below: left out
 US_REVIEW = 0.6        # between US_SKIP and this: staff decide
-QUESTIONS_V = 3  # bump when the questions or rules change, so cached answers aren't reused
+QUESTIONS_V = 4  # bump when the questions or rules change, so cached answers aren't reused
 
 CATEGORIES = {
     "discovery": "Drug discovery, before clinical trials: target identification and validation, screening, "
                  "medicinal or computational chemistry, structural biology, protein design, biomarker and "
-                 "translational research, genomics, preclinical models and pharmacology.",
+                 "translational research, genomics, preclinical models and pharmacology, DMPK and drug "
+                 "metabolism, virology and other disease-biology research. Includes AI and ML applied to this work.",
     "development": "Drug development, during clinical trials: clinical trial design and data, biostatistics, "
                    "pharmacometrics and clinical pharmacology, real-world evidence, regulatory affairs, drug "
-                   "safety, and process development or manufacturing for clinical-stage drugs.",
+                   "safety, and process development or manufacturing for clinical-stage drugs. Includes AI and ML "
+                   "applied to this work.",
     "tech": "Pure technology not tied to a stage of drug research: software engineering, IT, cloud and data "
-            "engineering, cybersecurity, AI and ML platforms, digital products.",
+            "engineering, cybersecurity, general AI and ML platforms, digital products. Not for roles that apply "
+            "AI or ML inside a research or clinical team (for example DMPK, virology, chemistry or clinical "
+            "data): those are discovery or development.",
     "other": "Anything else: commercial, marketing, market access, finance, HR, communications, supply chain, "
              "commercial manufacturing operations, facilities.",
 }
@@ -201,12 +205,40 @@ CATEGORY_RULES = [
                                r"analytical develop|formulation|\bpdm\b|technical develop", re.I)),
     ("discovery", re.compile(r"discovery|research|target|screen|medicinal chem|chemistry|structural|protein|"
                              r"biolog|genomic|translational|preclinical|pharmacolog|immunolog|oncolog|"
-                             r"neuroscience|assay|antibod|cell|in vivo|toxicolog", re.I)),
+                             r"neuroscience|assay|antibod|cell|in vivo|toxicolog|\bdmpk\b|drug metabolism|\badme\b|virolog", re.I)),
     ("tech", re.compile(r"software|\bit\b|information technology|cloud|cyber|data engineer|platform|devops|"
                         r"digital|full[- ]stack|web|infrastructure|tech@|ai\b|machine learning", re.I)),
 ]
+# a title naming a drug-pipeline area: it settles the category even when the role is AI-heavy (e.g.
+# "Intern - Research - Drug Metabolism - AI" is discovery and "Intern - Research - Clinical Virology - AI" is
+# development, not tech). Bare "research" isn't enough on its own: tech companies have AI research roles too.
+STAGE_TITLE = [
+    ("development", re.compile(r"clinical|regulatory|biostat|pharmacometric|pharmacovigilance|drug safety|patient safety|"
+                               r"real[- ]world|\brwe\b|\bheor\b|trial|medical affairs|\bcmc\b|process develop|process chem|"
+                               r"analytical develop|formulation", re.I)),
+    ("discovery", re.compile(r"discovery|medicinal chem|chemistry|structural biolog|protein|biolog|genomic|translational|"
+                             r"preclinical|pharmacolog|\bdmpk\b|drug metabolism|\badme\b|virolog|immunolog|oncolog|"
+                             r"neuroscience|assay|antibod|toxicolog|in vivo|target (?:id|discovery|validation)|screening", re.I)),
+]
 OTHER_TITLE = re.compile(r"marketing|commercial|finance|accounting|\bhr\b|human resources|communications|"
                          r"supply chain|procurement|sales|market access|market research|insights|pricing|real estate|legal|tax", re.I)
+
+
+def stage_from_title(title: str) -> str:
+    """discovery or development when the title names a drug-pipeline area, else ''."""
+    if OTHER_TITLE.search(title or ""):
+        return ""
+    return next((name for name, rx in STAGE_TITLE if rx.search(title or "")), "")
+
+
+def settle_category(v: Verdict, title: str) -> Verdict:
+    """A model (or the keyword rules) sometimes files an AI-heavy role under tech even though its title puts it
+    in the drug pipeline; the title wins then."""
+    stage = stage_from_title(title)
+    if v.category == "tech" and stage:
+        v.category = stage
+        v.note = (v.note + "; " if v.note else "") + f"filed under {stage}: the title names a drug-pipeline area"
+    return v
 
 
 def rules_classify(title: str, company: str, description: str) -> Verdict:
@@ -547,7 +579,7 @@ class Classifier:
     def classify(self, title: str, company: str, description: str, location: str = "") -> Verdict:
         key = self._key(title, company, description, location)
         if key in self.cache:
-            return Verdict(**self.cache[key])
+            return settle_category(Verdict(**self.cache[key]), title)
         v = None
         if self.llm and self.llm_failures < 5:
             started = time.monotonic()
@@ -580,7 +612,7 @@ class Classifier:
         if v.backend == self.name:   # don't cache a fallback answer under the model's key
             with self._lock:
                 self.cache[key] = asdict(v)
-        return v
+        return settle_category(Verdict(**asdict(v)), title)
 
     def save(self) -> None:
         if not self.cache_path:

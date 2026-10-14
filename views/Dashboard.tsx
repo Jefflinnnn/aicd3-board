@@ -12,7 +12,7 @@ import { UsMap } from "@/components/UsMap"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { useApp } from "@/lib/state"
 import {
-  CATS, COMPANIES, THIS_MONTH, TODAY, addDays, addMonths, ageDays, coById, daysLeft, fmt, inMonth, iso,
+  CATS, COMPANIES, THIS_MONTH, TODAY, addDays, addMonths, ageDays, applyBy, coById, daysLeft, fmt, inMonth, iso,
   isLive, monthEnd, monthLabel, type Job,
 } from "@/lib/data"
 import { cn } from "@/lib/utils"
@@ -490,7 +490,7 @@ export default function Dashboard() {
                     <span className="min-w-12 rounded-md bg-warn-soft px-1.5 py-1 text-center text-xs font-semibold tabular-nums text-warn">{daysLeft(j) === 0 ? "today" : `${daysLeft(j)}d`}</span>
                     <span className="min-w-0">
                       <span className="block truncate text-sm font-semibold">{j.title}</span>
-                      <span className="block truncate text-xs text-muted-foreground">{coById(j.company).name}, due {fmt(j.deadline)}</span>
+                      <span className="block truncate text-xs text-muted-foreground">{coById(j.company).name}, apply by {fmt(applyBy(j))}</span>
                     </span>
                     <CatChip id={j.category} />
                   </button>
@@ -596,7 +596,7 @@ export default function Dashboard() {
         >
           <BellRing className="size-4 shrink-0 text-warn" />
           <span className="text-foreground">
-            {urgent.length === 1 ? `${urgent[0].title} at ${coById(urgent[0].company).name}, which you saved, closes ${daysLeft(urgent[0]) === 0 ? "today" : fmt(urgent[0].deadline)}.` : `${urgent.length} roles you saved close within 3 days.`}
+            {urgent.length === 1 ? `${urgent[0].title} at ${coById(urgent[0].company).name}, which you saved, takes applications until ${daysLeft(urgent[0]) === 0 ? "today" : fmt(applyBy(urgent[0]))}.` : `${urgent.length} roles you saved close within 3 days.`}
           </span>
           <span className="ml-auto inline-flex items-center gap-1 whitespace-nowrap text-warn">Open job board <ArrowRight className="size-3.5" /></span>
         </button>

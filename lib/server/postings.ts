@@ -39,6 +39,8 @@ export const jobSchema = z.object({
   sample: z.boolean().optional(),
   closed: z.boolean().optional(),
   addedAt: z.number().int().nonnegative().optional(),
+  startFrom: z.number().int().min(1).max(12).optional(),
+  startTo: z.number().int().min(1).max(12).optional(),
 })
 export const reviewSchema = z.object({
   flags: z.array(text(300)).max(30),
@@ -65,6 +67,7 @@ export function toJob(r: Posting): Job {
     ...(r.sample ? { sample: true } : {}),
     ...(r.closed ? { closed: true } : {}),
     ...(r.addedAt ? { addedAt: r.addedAt.getTime() } : {}),
+    ...(r.startFrom ? { startFrom: r.startFrom, startTo: r.startTo ?? r.startFrom } : {}),
   }
 }
 export const toStaged = (r: Posting): StagedJob => ({ ...toJob(r), review: r.review as unknown as ReviewInfo })
@@ -76,6 +79,7 @@ function fields(j: Job) {
     category: j.category, posted: fromDay(j.posted), deadline: j.deadline ? fromDay(j.deadline) : null,
     term: j.term, mode: j.mode, pay: j.pay, url: j.url, reqId: (j.reqId || "").trim(), summary: j.summary, resp: j.resp, quals: j.quals,
     closed: !!j.closed, sample: !!j.sample, addedAt: j.addedAt ? new Date(j.addedAt) : null,
+    startFrom: j.startFrom ?? null, startTo: j.startFrom ? (j.startTo ?? j.startFrom) : null,
   }
 }
 

@@ -4,7 +4,7 @@ import { Bookmark, Check, ExternalLink, Flag, Info } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
-import { ROLLING_DAYS, catById, coById, daysLeft, fmt, isLive, jobLocations, type CatId, type Job } from "@/lib/data"
+import { ROLLING_DAYS, applyBy, catById, coById, daysLeft, fmt, startLabel, isLive, jobLocations, type CatId, type Job } from "@/lib/data"
 import type { MyStatus } from "@/lib/backend"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { cn } from "@/lib/utils"
@@ -54,7 +54,7 @@ export function DeadlineCell({ job, soonDays }: { job: Job; soonDays: number }) 
     txt = "Closed"
   } else if (d === 0) {
     cls = "text-warn font-semibold"
-    txt = "Closes today"
+    txt = "Last day"
   } else if (d <= soonDays) {
     cls = "text-warn font-semibold"
     txt = d === 1 ? "1 day left" : `${d} days left`
@@ -133,10 +133,11 @@ export function JobDialog({
   const live = isLive(job)
   const locs = jobLocations(job)
   const facts: [string, React.ReactNode][] = [
-    ["Deadline", job.closed ? "Taken down" : job.deadline ? fmt(job.deadline, { month: "long", day: "numeric", year: "numeric" }) + (live ? "" : " (closed)") : "Rolling"],
+    ["Deadline", job.closed ? "Taken down" : job.deadline ? fmt(job.deadline, { month: "long", day: "numeric", year: "numeric" }) + (live ? ` (apply by ${fmt(applyBy(job), { month: "short", day: "numeric" })})` : " (closed)") : "Rolling"],
     ["Category", <CatChip key="cat" id={job.category} />],
     ["Company type", c.type],
     ["Term", job.term],
+    ["Can start", startLabel(job) || "Not stated"],
     ["Work mode", job.mode],
     ["Pay", job.pay || "None listed"],
     ...(job.reqId ? ([["Job ID", <span key="rid" className="font-mono text-[0.92em]">{job.reqId}</span>]] as [string, React.ReactNode][]) : []),

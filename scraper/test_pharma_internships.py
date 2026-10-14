@@ -59,6 +59,40 @@ class TitleFilter(unittest.TestCase):
             self.assertFalse(pi.is_internship(t), t)
 
 
+class Category(unittest.TestCase):
+    def test_pipeline_area_in_title_beats_ai(self):
+        self.assertEqual(pi.guess_category("Intern - Research - Drug Metabolism - AI"), "discovery")
+        self.assertEqual(pi.guess_category("Intern - Research - Clinical Virology - AI"), "development")
+        self.assertEqual(pi.guess_category("Software Engineering Intern"), "tech")
+
+
+class StartWindow(unittest.TestCase):
+    def test_phrasings(self):
+        cases = {
+            "Must be able to commit to a full-time internship lasting 10–12 consecutive weeks between May and August.": (5, 7),
+            "Available to work full-time for 10-12 weeks beginning in May or June of 2027": (5, 6),
+            "Available for a 12 week internship beginning in late May or early June 2027": (5, 6),
+            "for 12 weeks starting May 26, 2027.": (5, 5),
+            "during the months of June – August 2027": (6, 7),
+            "Program Dates: Monday June 1, 2027 - Friday, August 14, 2027.": (6, 6),
+            "Our Co-op positions are full-time and onsite from January-August (Spring-Summer), "
+            "May/June-December (Summer-Fall) and August-December (Fall).": (1, 8),
+            "This application is for a 6-month student role from January - June 2027. Resume review begins in October 2026.": (1, 1),
+        }
+        for text, want in cases.items():
+            self.assertEqual(pi.start_window(text), want, text)
+
+    def test_not_a_start(self):
+        for text in ("Expected graduation date between December 2026 – June 2027", "You may apply now; graduating before June 2027",
+                     "Summer 2027 internship", ""):
+            self.assertEqual(pi.start_window(text), (None, None), text)
+
+    def test_in_import_record(self):
+        rec = pi.to_import_record(pi.Posting("Gilead Sciences", "Intern - Research - Drug Metabolism - AI",
+                                             description="10–12 consecutive weeks between May and August."))
+        self.assertEqual((rec["start_from"], rec["start_to"], rec["category"]), (5, 7, "discovery"))
+
+
 class BlockDetection(unittest.TestCase):
     def test_403(self):
         with self.assertRaises(pi.BlockedError):

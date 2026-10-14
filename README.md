@@ -97,7 +97,8 @@ It needs the app running (`pnpm dev`, or `--url https://your-app`) and `SCRAPER_
 - **Who can apply?** Undergraduate-only roles are left out (PhD-only roles are fine). Keyword rules catch the obvious ones first; d3 checks the rest.
 - **Is it in the US?** The scraper keeps only US locations; d3 checks again. Not in the US: left out.
 - **Is it a fit for AICD3?** Is ML, AI or computational work central to it (building or applying models, computational chemistry or biology, bioinformatics, PK/PD and pharmacometrics, clinical data science, software that automates scientific work)? Confident yes: published. Unsure: sent to the staff review queue with the model's confidence. No: left out.
-- **Which area?** Drug discovery (before clinical trials), drug development (during clinical trials), tech (not tied to a drug stage), or other. This becomes the posting's category.
+- **Which area?** Drug discovery (before clinical trials), drug development (during clinical trials), tech (not tied to a drug stage), or other. This becomes the posting's category. An AI-heavy role whose title names a drug-pipeline area (clinical, DMPK, drug metabolism, virology, chemistry…) is filed under that area, not tech, whatever the model said.
+- **When can it start?** Read from the posting's text, not asked of the model: "10–12 weeks between May and August" is May to July, "beginning in May or June" is May to June. It feeds the job board's **Start month** filter; postings that don't say show as "Not stated".
 
 When d3 is unsure who can apply or whether the role is in the US, a posting that would otherwise be published goes to the review queue instead, and the review item says why.
 
