@@ -3,12 +3,13 @@ beautifulsoup4>=4.12
 lxml>=5.0
 # connects like Chrome for sites behind Cloudflare bot checks (Eli Lilly's Workday); optional, but without it Lilly falls back to careers.lilly.com
 curl_cffi>=0.7
-# the llm classifier (Claude through Bedrock or the Anthropic API); without it the pipeline uses d3-flash or keyword rules
+# the optional llm classifier (Claude through Bedrock or the Anthropic API, only with --classifier llm)
 anthropic[bedrock]>=0.40
 # optional: Eli Lilly's headless-browser fallback, and --manual-session when a site shows a "verify you are human" page
 # (pip install playwright && playwright install chromium):
 # playwright>=1.45
-# optional, for the vllm-sr/d3-flash classifier (scraper/classify.py); without them the keyword rules are used:
+# for the vllm-sr/d3 model server (scraper/d3_server.py), installed into .venv-d3 by setup_d3.ps1 / setup_d3.sh
+# (PyTorch from https://download.pytorch.org/whl/cu128); the pipeline itself only needs requests to reach it:
 # transformers==5.17.0
 # torch
 # torchvision

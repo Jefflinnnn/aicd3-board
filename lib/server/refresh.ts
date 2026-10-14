@@ -14,8 +14,8 @@ import type { ScrapeRun } from "@/lib/generated/prisma/client"
  * Needs a server that can run Python: `pnpm dev` / `pnpm start` on a Mac or Linux box with
  * `pip install -r scraper/requirements.txt`. Serverless hosts (Vercel) can't, and say so.
  *
- * The same runner also does the one-time d3-flash setup (scraper/setup_d3.sh) from the Admin page.
- * Once .venv-d3 exists, refreshes use its Python, so they classify with d3-flash, without a restart.
+ * The same runner also does the one-time d3 setup (scraper/setup_d3.ps1 or setup_d3.sh) from the Admin page,
+ * which also starts the d3 model server (scraper/d3_server.py) that refreshes classify with.
  */
 
 const ROOT = /*turbopackIgnore: true*/ process.cwd()
@@ -72,22 +72,27 @@ export function runnerProblem(): string | null {
   return g.__pyCheck.problem
 }
 
-/** Whether d3-flash is set up for refreshes, and whether this server can set it up. */
-export function classifierInfo(): { llm: string; d3: boolean; revision: string; canSetup: string | null } {
-  // Claude (scraper/classify.py "llm") when its settings are in this server's environment (.env.local):
-  // Bedrock keys, optionally behind a gateway (ANTHROPIC_BEDROCK_BASE_URL), or an Anthropic API key
-  const e = process.env
-  const llm = (e.AWS_ACCESS_KEY_ID && e.AWS_SECRET_ACCESS_KEY) || e.ANTHROPIC_API_KEY
-    ? e.AICD3_LLM_MODEL || e.ANTHROPIC_DEFAULT_SONNET_MODEL || (e.AWS_ACCESS_KEY_ID ? "us.anthropic.claude-sonnet-5" : "claude-sonnet-5")
-    : ""
+/** Whether d3 is set up for refreshes, and whether this server can set it up. */
+export function classifierInfo(): { d3: boolean; revision: string; canSetup: string | null } {
   const d3 = fs.existsSync(D3_OK) && fs.existsSync(VENV_PY)
-  const supported = (process.platform === "darwin" && process.arch === "arm64") || WIN || process.platform === "linux"
   const canSetup = process.env.VERCEL
-    ? "Set up d3-flash from a copy of the app running on a Mac or a PC with an NVIDIA GPU."
-    : !supported
-      ? "The d3-flash setup button works on Apple-silicon Macs and on Windows or Linux PCs with an NVIDIA GPU."
+    ? "Set up d3 from a copy of the app running on a PC with a large NVIDIA GPU (64 GB or more, e.g. an RTX PRO 6000)."
+    : !(WIN || process.platform === "linux")
+      ? "d3 needs a Windows or Linux PC with an NVIDIA GPU with 64 GB or more of memory (e.g. an RTX PRO 6000)."
       : !fs.existsSync(SETUP) ? `scraper/${path.basename(SETUP)} is missing from this server.` : null
-  return { llm, d3, revision: d3 ? d3Revision() : "", canSetup }
+  return { d3, revision: d3 ? d3Revision() : "", canSetup }
+}
+
+/** Whether the d3 model server (scraper/d3_server.py) answers on this computer. */
+export async function d3Server(): Promise<{ up: boolean; detail: string }> {
+  const url = (process.env.D3_URL || `http://127.0.0.1:${process.env.D3_PORT || 8765}`).replace(/\/$/, "")
+  if (process.env.VERCEL) return { up: false, detail: url }
+  try {
+    const r = await fetch(url + "/health", { signal: AbortSignal.timeout(2000), cache: "no-store" })
+    const h = (await r.json()) as { ok?: boolean; model?: string; gpu?: string }
+    if (r.ok && h?.ok) return { up: true, detail: [h.model, h.gpu].filter(Boolean).join(" on ") }
+  } catch {}
+  return { up: false, detail: url }
 }
 
 function alive(pid: number | null): boolean {
@@ -100,14 +105,49 @@ function alive(pid: number | null): boolean {
   }
 }
 
-/** Mark runs whose process is gone (server restarted, crash) as failed. */
+/** The computer a run was started on (kept in its summary until the run's own summary replaces it). */
+const runHost = (r: { summary: unknown }) => {
+  const s = r.summary as { host?: unknown } | null
+  return s && typeof s.host === "string" ? s.host : null
+}
+/** The run's live progress (scraper/progress.py), kept in its summary next to the final counts. */
+const runProgress = (r: { summary: unknown }) => {
+  const p = (r.summary as { progress?: { at?: unknown } } | null)?.progress
+  return p && typeof p === "object" ? p : null
+}
+/** a run reporting its own progress is presumed dead once it has been silent this long (it sends at least every 45 s) */
+const SILENT_MS = 10 * 60_000
+
+/**
+ * Mark runs whose process is gone (server restarted, crash) as failed. A server only judges runs it can
+ * see the process of: runs started on another computer sharing this database (the GPU PC, while the live
+ * site's Admin page is open on Vercel) are left alone until they're older than 6 hours.
+ */
 export async function sweepDeadRuns() {
   const running = await db().scrapeRun.findMany({ where: { status: "running" } })
+  const here = os.hostname()
   for (const r of running) {
     if (live.has(r.id)) continue
+    if (!r.pid) {
+      // started outside the app (the daily scheduled task on the GPU PC): there's no process to look at, but it
+      // reports progress at least every 45 s, so it's alive while that keeps coming (any server can judge this)
+      const at = runProgress(r)?.at
+      const beat = typeof at === "number" ? at : r.startedAt.getTime()
+      if (Date.now() - beat > SILENT_MS) {
+        console.warn(`[refresh] run ${r.id} marked failed: no progress for ${Math.round((Date.now() - beat) / 60_000)} minutes`)
+        await db().scrapeRun.update({
+          where: { id: r.id },
+          data: { status: "failed", finishedAt: new Date(), log: (r.log + `\n[server] stopped: the run stopped reporting progress (the PC running it was turned off, restarted or lost its connection, or the run crashed) (noticed ${new Date().toLocaleString()})`).slice(-60000) },
+        })
+      }
+      continue
+    }
     const old = Date.now() - r.startedAt.getTime() > STALE_MS
+    const host = runHost(r)
+    const elsewhere = !!process.env.VERCEL || (host !== null && host !== here)   // Vercel never runs the scraper
+    if (elsewhere && !old) continue
     if (old || !alive(r.pid)) {
-      if (old) killGroup(r.pid)
+      if (old && !elsewhere) killGroup(r.pid)
       console.warn(`[refresh] run ${r.id} marked failed: ${old ? "took longer than 6 hours" : "its process is gone (the app restarted?)"}`)
       await db().scrapeRun.update({
         where: { id: r.id },
@@ -146,7 +186,7 @@ export async function startRefresh(trigger: "manual" | "schedule" | "setup", req
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(7242001)`
     const current = await tx.scrapeRun.findFirst({ where: { status: "running" }, orderBy: { startedAt: "desc" } })
     if (current) return { run: current, started: false }
-    return { run: await tx.scrapeRun.create({ data: { trigger, requestedBy } }), started: true }
+    return { run: await tx.scrapeRun.create({ data: { trigger, requestedBy, summary: { host: os.hostname() } } }), started: true }
   })
   if (!started) return { run, started }
 
@@ -159,7 +199,8 @@ export async function startRefresh(trigger: "manual" | "schedule" | "setup", req
     cwd: ROOT,
     // UTF-8 output: on Windows, Python would otherwise print through the console code page and fail on
     // non-Latin job titles
-    env: { ...process.env, AICD3_INGEST_TOKEN: process.env.SCRAPER_INGEST_TOKEN, PYTHONUNBUFFERED: "1", PYTHONIOENCODING: "utf-8", PYTHONUTF8: "1", ...(rev ? { D3_REVISION: rev } : {}) },
+    // AICD3_RUN_ID: the pipeline reports its live progress to this run (scraper/progress.py)
+    env: { ...process.env, AICD3_INGEST_TOKEN: process.env.SCRAPER_INGEST_TOKEN, ...(trigger === "setup" ? {} : { AICD3_RUN_ID: run.id }), PYTHONUNBUFFERED: "1", PYTHONIOENCODING: "utf-8", PYTHONUTF8: "1", ...(rev ? { D3_REVISION: rev } : {}) },
     stdio: ["ignore", "pipe", "pipe"],
     detached: !WIN, // its own process group, so Stop ends the scraper and anything it started (Windows: taskkill /T)
     windowsHide: true,
@@ -194,6 +235,9 @@ export async function startRefresh(trigger: "manual" | "schedule" | "setup", req
     const status = cancelled ? "cancelled" : code === 0 ? "succeeded" : code === 2 && summary ? "partial" : "failed"
     const secs = Math.round((Date.now() - t0) / 1000)
     const how = signal ? `was stopped by ${signal}` : `exited with code ${code}`
+    // keep the live progress the pipeline reported next to its final counts (the Admin page draws the run from it)
+    const progress = await db().scrapeRun.findUnique({ where: { id: run.id }, select: { summary: true } }).then((r) => (r ? runProgress(r) : null), () => null)
+    if (summary && progress) summary = { ...(summary as object), progress }
     entry.lines.push(`[server] ${new Date().toLocaleString()}: the ${trigger === "setup" ? "setup" : "pipeline"} ${how} after ${Math.floor(secs / 60)}m ${secs % 60}s: ${status}`)
     ;(status === "failed" ? console.error : console.log)(`[refresh] run ${run.id} ${status} (${how}, ${Math.floor(secs / 60)}m ${secs % 60}s)${status === "failed" ? `. Last lines:\n  ${entry.lines.slice(-8).join("\n  ")}` : ""}`)
     await db().scrapeRun.update({

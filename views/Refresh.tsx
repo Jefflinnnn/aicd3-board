@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
 import { Label } from "@/components/ui/label"
 import { Panel } from "@/components/common"
+import { RefreshRoutes } from "@/components/RefreshRoutes"
 import { cn } from "@/lib/utils"
 import { useApp } from "@/lib/state"
 import { getRefreshStatus, refreshNow, setAutoRefresh, setupClassifier, stopRefresh } from "@/lib/refresh-actions"
@@ -27,7 +28,7 @@ function took(r: RefreshRun) {
 }
 
 /**
- * Admin: run the scraper pipeline (scrape -> classify -> import -> re-check) now, or every 2 days.
+ * Admin: run the scraper pipeline (scrape -> classify -> import -> re-check) now, or every day.
  * The server runs it in the background; this panel polls for progress.
  */
 export function Refresh() {
@@ -45,7 +46,7 @@ export function Refresh() {
         const r = s.runs[0]
         const d = r.summary?.database
         if (r.trigger === "setup") {
-          toast(r.status === "succeeded" ? "d3-flash is set up." : r.status === "cancelled" ? "Setup stopped." : "The d3-flash setup didn't finish.", {
+          toast(r.status === "succeeded" ? "d3 is set up and its server is running." : r.status === "cancelled" ? "Setup stopped." : "The d3 setup didn't finish.", {
             description: r.status === "succeeded" ? "The next refresh classifies with it." : r.status === "failed" ? "The panel shows why." : undefined,
           })
         } else {
@@ -100,7 +101,10 @@ export function Refresh() {
 
   const last = st?.runs[0]
   const history = st?.runs.slice(last?.status === "running" ? 1 : 0) ?? []
-  const everyDays = st ? Math.round(st.everyHours / 24) : 2
+  // turning the switch on asks for a daily refresh, so that's what it says while it's off; while it's on, it says
+  // what's actually saved (an older setting of every 2 days shows until the switch is turned off and on again)
+  const everyDays = st?.autoRefresh ? Math.max(1, Math.round(st.everyHours / 24)) : 1
+  const every = everyDays === 1 ? "every day" : `every ${everyDays} days`
 
   return (
     <Panel
@@ -126,8 +130,8 @@ export function Refresh() {
       )}
 
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b pb-3">
-        <Switch id="auto-refresh" checked={!!st?.autoRefresh} disabled={busy || !st} onCheckedChange={(on) => act(() => setAutoRefresh(on), on ? `Will refresh every ${everyDays} days` : "Automatic refresh off")} />
-        <Label htmlFor="auto-refresh" className="cursor-pointer">Refresh automatically every {everyDays} days</Label>
+        <Switch id="auto-refresh" checked={!!st?.autoRefresh} disabled={busy || !st} onCheckedChange={(on) => act(() => setAutoRefresh(on, 24), on ? "Will refresh every day" : "Automatic refresh off")} />
+        <Label htmlFor="auto-refresh" className="cursor-pointer">Refresh automatically {every}</Label>
         <span className="text-xs text-muted-foreground">
           {st?.autoRefresh ? (st.nextAt && st.nextAt > now ? `Next run ${when(st.nextAt)}` : running ? "Running now" : "Next run within 15 minutes") : "Off"}
           {st?.autoRefresh && " (while this server is running)"}
@@ -138,22 +142,24 @@ export function Refresh() {
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-b py-3 text-sm">
           <Cpu className="size-4 text-muted-foreground" aria-hidden />
           <span>
-            Classifier: <b className="font-medium">{st.classifier.llm ? "Claude" : st.classifier.d3 ? "d3-flash" : "keyword rules"}</b>
-            {st.classifier.llm && <span className="text-muted-foreground"> ({st.classifier.llm}; needs the UCSF VPN, keyword rules otherwise)</span>}
-            {!st.classifier.llm && st.classifier.d3 && st.classifier.revision && <span className="text-muted-foreground"> (version {st.classifier.revision.slice(0, 7)})</span>}
+            Classifier: <b className="font-medium">{st.classifier.server.up ? "d3" : "keyword rules"}</b>
+            {st.classifier.server.up && <span className="text-muted-foreground"> ({st.classifier.server.detail}, on this PC)</span>}
+            {!st.classifier.server.up && st.classifier.d3 && (
+              <span className="text-warn"> (the d3 server isn&apos;t answering at {st.classifier.server.detail}; start it with scraper\start_d3_server.ps1, or sign out and back in)</span>
+            )}
           </span>
-          {!st.classifier.llm && !st.classifier.d3 && !st.classifier.canSetup && (
+          {!st.classifier.d3 && !st.classifier.canSetup && (
             <>
               <Button size="sm" variant="outline" className="h-8" disabled={busy || running}
-                onClick={() => act(async () => { const r = await setupClassifier(); if (!r.started) toast("Something is already running; try again when it finishes.") }, "Setting up d3-flash. You can leave this page; it keeps going.")}>
-                Set up d3-flash
+                onClick={() => act(async () => { const r = await setupClassifier(); if (!r.started) toast("Something is already running; try again when it finishes.") }, "Setting up d3. You can leave this page; it keeps going.")}>
+                Set up d3
               </Button>
               <span className="basis-full text-xs text-muted-foreground">
-                The machine-learning classifier: more accurate than keyword rules. Setup downloads about 17 GB once and takes 20–40 minutes; it needs an Apple-silicon Mac with 24 GB or more of memory, or a Windows or Linux PC with an NVIDIA GPU with 20 GB or more.
+                The vllm-sr/d3 decision model, hosted on this PC: more accurate than keyword rules. Setup downloads about 52 GB once and takes 30–60 minutes; it needs an NVIDIA GPU with 64 GB or more (e.g. an RTX PRO 6000).
               </span>
             </>
           )}
-          {!st.classifier.llm && !st.classifier.d3 && st.classifier.canSetup && <span className="basis-full text-xs text-muted-foreground">{st.classifier.canSetup}</span>}
+          {!st.classifier.d3 && !st.classifier.server.up && st.classifier.canSetup && <span className="basis-full text-xs text-muted-foreground">{st.classifier.canSetup}</span>}
         </div>
       )}
 
@@ -164,6 +170,7 @@ export function Refresh() {
       ) : (
         <>
           <RunRow run={last} detailed />
+          {last.trigger !== "setup" && <RefreshRoutes run={last} />}
           {running && last.log && (
             <pre aria-live="polite" className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap rounded-md bg-muted px-3 py-2 font-mono text-[0.72rem] leading-relaxed text-muted-foreground">{last.log}</pre>
           )}
@@ -202,22 +209,23 @@ function RunRow({ run, detailed = false }: { run: RefreshRun; detailed?: boolean
         </span>
         <span>{when(run.startedAt)}</span>
         <span className="text-muted-foreground">
-          · {run.status === "running" ? `${took(run)} so far` : took(run)} · {run.trigger === "setup" ? `d3-flash setup, started by ${run.by || "staff"}` : run.trigger === "schedule" ? "automatic" : `started by ${run.by || "staff"}`}
+          · {run.status === "running" ? `${took(run)} so far` : took(run)} · {run.trigger === "setup" ? `d3 setup, started by ${run.by || "staff"}` : run.trigger === "schedule" ? "automatic" : `started by ${run.by || "staff"}`}
         </span>
       </div>
       {s && d && (
         <p className="mt-1 text-sm text-muted-foreground">
+          {s.dryRun && <b className="font-medium text-foreground">Dry run, nothing saved. Would have been: </b>}
           {s.scraped} US internships found: <b className="font-medium text-foreground">{d.added} new on the board</b>, {d.staged} sent to review,{" "}
-          {d.updated} updated, {d.closed} closed{d.dropped ? `, ${d.dropped} cleared from review` : ""}{d.unlisted ? `, ${d.unlisted} moved to the bin as no longer a fit` : ""}, {s.skip} left out as not ML/automation-focused{s.undergrad ? `, ${s.undergrad} left out as undergraduate-only` : ""}
+          {d.updated} updated, {d.closed} closed{d.dropped ? `, ${d.dropped} cleared from review` : ""}{d.unlisted ? `, ${d.unlisted} moved to the bin as no longer a fit` : ""}, {s.skip} left out as not a fit{s.undergrad ? `, ${s.undergrad} left out as undergraduate-only` : ""}{s.not_us ? `, ${s.not_us} left out as outside the US` : ""}
           {s.checked && `; re-check: ${s.checked.closed} taken down, ${s.checked.unknown} need a look`}.
-          {detailed && ` Classifier: ${s.classifier === "llm" ? "Claude" : s.classifier === "d3" ? "d3-flash" : "keyword rules"}.`}
+          {detailed && ` Classifier: ${s.classifier === "llm" ? "Claude" : s.classifier === "d3" ? "d3" : "keyword rules"}.`}
         </p>
       )}
       {detailed && s?.failed?.length ? (
         <p className="mt-1 text-xs text-warn">Couldn&apos;t scrape: {s.failed.map((n) => `${n} (${s.companies[n]})`).join("; ")}</p>
       ) : null}
       {reason && <p className="mt-1 text-xs text-warn"><AlertTriangle className="mr-1 inline size-3" />{reason}</p>}
-      {detailed && s?.classifierNote && <p className="mt-1 text-xs text-warn"><AlertTriangle className="mr-1 inline size-3" />Claude wasn’t used for this run, so keyword rules classified it: {s.classifierNote}</p>}
+      {detailed && s?.classifierNote && <p className="mt-1 text-xs text-warn"><AlertTriangle className="mr-1 inline size-3" />{s.classifier === "rules" ? "Keyword rules classified this run" : "Keyword rules classified part of this run"}: {s.classifierNote}</p>}
       {s?.checkError && <p className="mt-1 text-xs text-warn">Re-checking open postings stopped early ({s.checkError}); the import was still saved.</p>}
       {run.status !== "running" && run.log && (
         <details className="mt-1 text-xs" open={detailed && run.status === "failed"}>

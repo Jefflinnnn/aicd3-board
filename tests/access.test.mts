@@ -55,6 +55,7 @@ const authRoute = await import("../app/api/auth/[...path]/route")
 const openRoute = await import("../app/api/ingest/open/route")
 const closeRoute = await import("../app/api/ingest/close/route")
 const flagRoute = await import("../app/api/ingest/flag/route")
+const progressRoute = await import("../app/api/ingest/progress/route")
 const prisma = db()
 
 const job = (id: string, extra: Record<string, unknown> = {}) => ({
@@ -540,7 +541,7 @@ describe("job data refresh", () => {
     process.env.FAKE_SLEEP = "0"
   })
 
-  it("runs on its own every 2 days when turned on", async () => {
+  it("runs on its own every day when turned on", async () => {
     await prisma.scrapeRun.deleteMany()
     as(admin)
     assert.equal(await RS.runIfDue(), false) // off
@@ -549,19 +550,23 @@ describe("job data refresh", () => {
     const first = await settle()
     assert.equal(first.trigger, "schedule")
     assert.equal(await RS.runIfDue(), false)
-    assert.equal(await RS.runIfDue(new Date(Date.now() + 47 * 3600_000)), false)
-    assert.equal(await RS.runIfDue(new Date(Date.now() + 49 * 3600_000)), true)
+    assert.equal(await RS.runIfDue(new Date(Date.now() + 23 * 3600_000)), false)
+    assert.equal(await RS.runIfDue(new Date(Date.now() + 25 * 3600_000)), true)
     await settle()
     const st = await R.getRefreshStatus()
+    assert.equal(st.everyHours, 24)
     assert.equal(st.autoRefresh, true)
-    assert.ok(st.nextAt && st.nextAt > Date.now() + 47 * 3600_000)
+    assert.ok(st.nextAt && st.nextAt > Date.now() + 23 * 3600_000)
   })
 
-  it("offers the d3-flash setup only where it can run, and reports the classifier in use", async () => {
+  it("offers the d3 setup only where it can run, and reports the classifier in use", async () => {
     as(admin)
+    process.env.D3_URL = "http://127.0.0.1:9"   // nothing listens there
     const st = await R.getRefreshStatus()
+    delete process.env.D3_URL
     assert.equal(st.classifier.d3, false)
-    // Macs (Apple silicon), Windows and Linux can run the setup; Vercel can't
+    assert.deepEqual(st.classifier.server, { up: false, detail: "http://127.0.0.1:9" })
+    // Windows and Linux PCs can run the setup; Vercel can't
     assert.equal(st.classifier.canSetup, null)
     process.env.VERCEL = "1"
     try {
@@ -572,7 +577,7 @@ describe("job data refresh", () => {
     }
     as(alice)
     await rejects(R.setupClassifier())
-    // once setup has finished (.venv-d3 with its python and the D3_OK marker), refreshes report d3-flash
+    // once setup has finished (.venv-d3 with its python and the D3_OK marker), refreshes report d3
     const fs = await import("node:fs")
     fs.mkdirSync(".venv-d3/bin", { recursive: true })
     fs.writeFileSync(".venv-d3/bin/python", "")
@@ -591,6 +596,19 @@ describe("job data refresh", () => {
     await prisma.scrapeRun.create({ data: { trigger: "manual", pid: 2 ** 22 + 12345 } })
     await RS.sweepDeadRuns()
     assert.equal((await prisma.scrapeRun.findFirst({ orderBy: { startedAt: "desc" } }))?.status, "failed")
+    // a run on another computer sharing the database (the GPU PC) is left alone: this server can't see its process
+    const elsewhere = await prisma.scrapeRun.create({ data: { trigger: "setup", pid: 2 ** 22 + 12346, summary: { host: "another-pc" } } })
+    await RS.sweepDeadRuns()
+    assert.equal((await prisma.scrapeRun.findUnique({ where: { id: elsewhere.id } }))?.status, "running")
+    process.env.VERCEL = "1"   // nor does Vercel judge any run, wherever it started
+    const anywhere = await prisma.scrapeRun.create({ data: { trigger: "manual", pid: 2 ** 22 + 12347 } })
+    try {
+      await RS.sweepDeadRuns()
+      assert.equal((await prisma.scrapeRun.findUnique({ where: { id: anywhere.id } }))?.status, "running")
+    } finally {
+      delete process.env.VERCEL
+      await prisma.scrapeRun.deleteMany({ where: { id: { in: [elsewhere.id, anywhere.id] } } })
+    }
     process.env.VERCEL = "1"
     try {
       assert.match(RS.runnerProblem() ?? "", /Vercel/)
@@ -599,6 +617,66 @@ describe("job data refresh", () => {
     } finally {
       delete process.env.VERCEL
     }
+  })
+})
+
+describe("live refresh progress (the daily task on the GPU PC)", () => {
+  before(async () => {
+    await wipe()
+    await prisma.profile.create({ data: { id: admin.id, email: admin.email, emailVerified: true, role: "admin", status: "active" } })
+  })
+  const token = () => process.env.SCRAPER_INGEST_TOKEN!
+  const report = (body: Record<string, unknown>, t: string | null = token()) =>
+    progressRoute.POST(new Request("http://localhost/api/ingest/progress", { method: "POST", body: JSON.stringify(body), headers: t ? { authorization: "Bearer " + t } : {} }))
+  const progress = (extra: Record<string, unknown> = {}) => ({
+    v: 1, at: Date.now(), host: "gpu-pc", step: "scrape", classifier: "",
+    companies: [{ name: "Amgen", state: "running", found: null, note: "" }, { name: "Gilead Sciences", state: "waiting", found: null, note: "" }],
+    classify: { done: 0, total: 0 }, outcome: null, checked: null, ...extra,
+  })
+
+  it("needs the token and a real report", async () => {
+    assert.equal((await report({ event: "start", progress: progress() }, null)).status, 401)
+    assert.equal((await report({ event: "start", progress: { ...progress(), step: "dancing" } })).status, 400)
+  })
+
+  it("opens a run, shows its progress on the Admin page, refuses a second one, and closes it", async () => {
+    const start = await report({ event: "start", trigger: "schedule", progress: progress() })
+    assert.equal(start.status, 200)
+    const { runId } = await start.json()
+    assert.ok(runId)
+    // a second refresh can't start beside it, from the pipeline or from the Admin page
+    assert.equal((await report({ event: "start", progress: progress() })).status, 409)
+    as(admin)
+    assert.deepEqual(await R.refreshNow().catch(() => ({ started: false })), { started: false })
+    // progress shows up on the Admin page
+    await report({ event: "update", runId, progress: progress({ step: "classify", companies: [{ name: "Amgen", state: "done", found: 7, note: "" }] }) })
+    let st = await R.getRefreshStatus()
+    assert.equal(st.runs[0].status, "running")
+    assert.equal(st.runs[0].trigger, "schedule")
+    assert.deepEqual([st.runs[0].progress?.step, st.runs[0].progress?.companies[0].found], ["classify", 7])
+    // another server sweeping for dead runs leaves it alone while it keeps reporting
+    await RS.sweepDeadRuns()
+    assert.equal((await prisma.scrapeRun.findUnique({ where: { id: runId } }))?.status, "running")
+    // finished: status, counts, log and the last progress are kept
+    const done = await report({ event: "finish", runId, status: "succeeded", summary: { scraped: 7, publish: 3, companies: { Amgen: "ok (7)" } },
+      log: "[run] finished", progress: progress({ step: "done", outcome: { publish: 3, review: 1, skip: 3, undergrad: 0, not_us: 0 } }) })
+    assert.equal(done.status, 200)
+    st = await R.getRefreshStatus()
+    assert.equal(st.runs[0].status, "succeeded")
+    assert.equal(st.runs[0].summary?.scraped, 7)
+    assert.equal(st.runs[0].progress?.outcome?.publish, 3)
+    assert.equal(st.runs[0].log, "[run] finished")
+  })
+
+  it("tells the pipeline to stop when staff press Stop, and fails a run that went silent", async () => {
+    const { runId } = await (await report({ event: "start", progress: progress() })).json()
+    as(admin)
+    assert.deepEqual(await R.stopRefresh(), { stopped: true })
+    const r = await (await report({ event: "update", runId, progress: progress() })).json()
+    assert.equal(r.running, false)
+    const silent = await prisma.scrapeRun.create({ data: { trigger: "schedule", summary: { host: "gpu-pc", progress: progress({ at: Date.now() - 11 * 60_000 }) } } })
+    await RS.sweepDeadRuns()
+    assert.equal((await prisma.scrapeRun.findUnique({ where: { id: silent.id } }))?.status, "failed")
   })
 })
 
