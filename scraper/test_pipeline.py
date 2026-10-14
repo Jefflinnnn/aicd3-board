@@ -9,20 +9,27 @@ import classify as c
 import pharma_internships as pi
 import pipeline
 
+# never report test runs to a real app (the PC running these tests may have the app up on :3000)
+os.environ["AICD3_PROGRESS"] = "off"
+
 # pipeline.main() writes a run log; keep the tests' logs out of the real scraper/out/logs/
 os.environ["AICD3_LOG_FILE"] = os.path.join(tempfile.mkdtemp(prefix="aicd3-test-logs-"), "pipeline-test.log")
 
 
-# Never reach Claude from the tests, even on a machine whose .env.local has the settings
+# Never reach Claude or a real d3 server from the tests, even on a machine whose .env.local has the settings
+RealD3 = c.D3
 _no_llm = mock.patch.object(c, "llm_configured", return_value=False)
+_no_d3 = mock.patch.object(c, "D3", side_effect=ConnectionError("the d3 server at http://127.0.0.1:8765 isn't answering (test)"))
 
 
 def setUpModule():
     _no_llm.start()
+    _no_d3.start()
 
 
 def tearDownModule():
     _no_llm.stop()
+    _no_d3.stop()
 
 
 class FakeBlock:
@@ -88,13 +95,7 @@ class Claude(unittest.TestCase):
         self.assertIn("UCSF VPN", why)
         with mock.patch("requests.get", side_effect=requests.exceptions.ConnectTimeout("timed out")):
             self.assertIn("UCSF VPN", self.ucsf_llm().reachable()[1])
-        # auto: one clear warning, then keyword rules for the run (no per-posting failures)
         llm = mock.Mock(model="m", needs_vpn=True, reachable=mock.Mock(return_value=(False, "couldn't connect. " + c.VPN_HINT)))
-        with mock.patch.object(c, "llm_configured", return_value=True), mock.patch.object(c, "LLM", return_value=llm), \
-                self.assertLogs("classify", "WARNING") as logs:
-            clf = c.Classifier("auto", cache_path=None)
-        self.assertEqual(clf.name, "rules")
-        self.assertTrue(any("UCSF VPN" in m for m in logs.output))
         with mock.patch.object(c, "LLM", return_value=llm), self.assertRaises(ConnectionError):
             c.Classifier("llm", cache_path=None)   # asked for Claude explicitly: fail loudly
 
@@ -155,11 +156,11 @@ class Claude(unittest.TestCase):
         self.assertEqual(recs[0]["description"], PKPD_ANSWER["summary"])
         self.assertIn("Claude: Mostly bench work", recs[0]["review_reason"])
 
-    def test_auto_uses_claude_when_configured(self):
+    def test_auto_never_uses_claude(self):
+        # d3 replaced Claude/Versa: auto is d3, else keyword rules, even with Claude's settings present
         with mock.patch.object(c, "llm_configured", return_value=True), mock.patch.object(c, "LLM") as llm:
-            llm.return_value.model = "m"
-            llm.return_value.reachable.return_value = (True, "")
-            self.assertEqual(c.Classifier("auto", cache_path=None).name, "llm")
+            self.assertEqual(c.Classifier("auto", cache_path=None).name, "rules")
+        llm.assert_not_called()
 
 
 class AnswerShapes(unittest.TestCase):
@@ -184,10 +185,12 @@ class AnswerShapes(unittest.TestCase):
 
 
 class FakeD3:
+    model = "vllm-sr/d3@abc"
+
     def __init__(self, answers):
         self.answers, self.calls = answers, 0
 
-    def classify(self, title, company, description):
+    def classify(self, title, company, description, location=""):
         self.calls += 1
         ans = self.answers
         cat, cp = c.best_choice(ans["category"], c.CATEGORIES)
@@ -234,11 +237,13 @@ class Decisions(unittest.TestCase):
             broken.d3 = mock.Mock(classify=mock.Mock(side_effect=RuntimeError("out of memory")))
             self.assertEqual(broken.classify("Data Science Intern", "Amgen", "Python and SQL").backend, "rules")
 
-    def test_auto_falls_back_when_the_model_cant_load(self):
-        with mock.patch.object(c, "D3", side_effect=ImportError("No module named 'torch'")):
-            self.assertEqual(c.Classifier("auto", cache_path=None).name, "rules")
-            with self.assertRaises(ImportError):
-                c.Classifier("d3", cache_path=None)
+    def test_unreachable_server_warns_and_uses_rules(self):
+        for backend in ("auto", "d3"):
+            with self.assertLogs("classify", "WARNING") as logs:
+                clf = c.Classifier(backend, cache_path=None)
+            self.assertEqual(clf.name, "rules")
+            self.assertIn("isn't answering", logs.output[0])
+            self.assertIn("d3 not used", clf.fallback_reason)
 
 
 class Pipeline(unittest.TestCase):

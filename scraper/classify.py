@@ -16,13 +16,16 @@ questions per posting:
        tech         - pure tech, not tied to a drug stage (software, IT, data engineering, AI platforms)
        other        - everything else (commercial, finance, manufacturing ops, HR...)
 
+With the d3 backend, two eligibility questions come first (the keyword rules already check them on the
+way in; d3 checks again): is the internship open to graduate students (PhD-only is fine, undergraduate-only
+isn't), and is it in the US.
+
 Backends
-  d3     vllm-sr/d3-flash (https://huggingface.co/vllm-sr/d3-flash): a 9B "decision" model that returns
-         a probability for every answer without generating text. Runs locally with transformers on an
-         NVIDIA GPU (cuda), an Apple-silicon Mac (mps, needs about 20 GB of free memory) or, slowly, CPU.
-           pip install "transformers==5.17.0" torch torchvision pillow opencv-python-headless safetensors accelerate
-         The model ships its own Python code (trust_remote_code); pin a reviewed revision with
-         D3_REVISION=<commit> if you want to be sure it doesn't change under you.
+  d3     vllm-sr/d3 (https://huggingface.co/vllm-sr/d3): a 27B "decision" model that returns a probability
+         for every answer without generating text. It runs on this computer's GPU in its own process,
+         scraper/d3_server.py (start it with scraper/start_d3_server.ps1; setup_d3.ps1 installs everything),
+         and this script asks it over http://127.0.0.1:8765 (D3_URL to change). If the server can't be
+         reached, the run logs a warning and uses keyword rules.
   llm    Claude, through Amazon Bedrock (the same settings Claude Code uses: ANTHROPIC_BEDROCK_BASE_URL for
          a gateway such as UCSF's, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION) or the Anthropic API
          (ANTHROPIC_API_KEY). One call per posting answers both questions with a one-line reason and also
@@ -32,12 +35,12 @@ Backends
          first and says so, then uses keyword rules, if it can't be reached.
            pip install "anthropic[bedrock]"
   rules  keyword rules, no download; the fallback when nothing else is available.
-  auto   llm if its settings are there, else d3 if it loads, else rules (the default).
+  auto   d3 if its server answers, else rules (the default). Claude is only used when asked for (--classifier llm).
 
 Results are cached in scraper/out/classify_cache.json by posting text, so a daily run only
 classifies new or changed postings.
 
-  python3 scraper/classify.py --check                 # load the model and classify one sample
+  python3 scraper/classify.py --check                 # ask the d3 server about one sample posting
   python3 scraper/classify.py --check --classifier llm   # one sample through Claude (checks your settings)
   python3 scraper/classify.py scraper/out/raw.json    # classify a scraper run, print a table
 """
@@ -57,7 +60,7 @@ from dataclasses import asdict, dataclass, field
 
 log = logging.getLogger("classify")
 
-D3_MODEL = os.environ.get("D3_MODEL", "vllm-sr/d3-flash")
+D3_URL_DEFAULT = "http://127.0.0.1:8765"
 CACHE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "out", "classify_cache.json")
 TEXT_LIMIT = 6000
 
@@ -65,7 +68,12 @@ TEXT_LIMIT = 6000
 FIT_MIN = 0.6      # ML/automation score at or above this: a fit
 REVIEW_MIN = 0.45  # between REVIEW_MIN and FIT_MIN: borderline
 PIPELINE = ("discovery", "development")
-QUESTIONS_V = 2  # bump when the questions or rules change, so cached answers aren't reused
+# eligibility thresholds (d3 only): P(undergraduate-only) and P(in the US)
+UNDERGRAD_SKIP = 0.6   # at or above: left out
+UNDERGRAD_REVIEW = 0.4  # between this and UNDERGRAD_SKIP: staff decide
+US_SKIP = 0.3          # below: left out
+US_REVIEW = 0.6        # between US_SKIP and this: staff decide
+QUESTIONS_V = 3  # bump when the questions or rules change, so cached answers aren't reused
 
 CATEGORIES = {
     "discovery": "Drug discovery, before clinical trials: target identification and validation, screening, "
@@ -80,14 +88,25 @@ CATEGORIES = {
              "commercial manufacturing operations, facilities.",
 }
 COMPUTATIONAL_Q = (
-    "Is machine learning, AI or computational automation central to this internship: building or applying "
-    "ML or AI models, computational chemistry or biology, modeling and simulation (for example "
-    "pharmacometrics), bioinformatics, or writing software that automates scientific or data workflows? "
+    "Is this internship a good fit for a student in UCSF's master's program in Artificial Intelligence and "
+    "Computational Drug Discovery and Development (AICD3), because machine learning, AI or computational "
+    "work is central to it: building or applying ML or AI models, computational chemistry or "
+    "cheminformatics, structural biology or protein design, bioinformatics and omics, modeling and "
+    "simulation (for example pharmacometrics, PK/PD or QSP), clinical or real-world data science, or writing "
+    "software that automates scientific or data workflows? "
     "Answer no when the computational part is only spreadsheets, dashboards, reporting, routine statistics "
     "or IT support, or when the role is mainly lab bench work, manufacturing, clinical operations, sales, "
     "marketing, finance, HR or communications."
 )
 CATEGORY_Q = "Which part of the pharmaceutical pipeline does this internship belong to?"
+LEVEL_Q = "Who can apply for this internship?"
+LEVELS = {
+    "graduate": "Graduate or professional students can apply: it names master's, PhD, PharmD or MD students, "
+                "says any university student, or doesn't limit who can apply.",
+    "undergrad_only": "Only undergraduate (bachelor's), community-college or high-school students can apply.",
+}
+US_Q = ("Is this internship based in the United States, or remote from within the United States? "
+        "Answer yes when at least one of its locations is in the US.")
 
 
 @dataclass
@@ -101,23 +120,61 @@ class Verdict:
     summary: str = ""
     resp: list = field(default_factory=list)
     quals: list = field(default_factory=list)
+    # eligibility, asked of d3 only (-1: not asked; the scraper's keyword checks still apply)
+    undergrad: float = -1.0   # probability it's open to undergraduates only
+    us: float = -1.0          # probability it's in the US
 
     @property
     def decision(self) -> str:
         """publish | review | skip.
-        Published: ML/automation-centred roles in discovery, development or tech (the job board shows
-        discovery and development by default; students can add tech). Review: only the borderline ones
-        inside the drug pipeline, and ML-centred roles filed under other. Everything else is left out,
-        so the review queue stays short."""
+        Left out first: undergraduate-only or outside the US. Then published: ML/automation-centred roles in
+        discovery, development or tech (the job board shows discovery and development by default; students
+        can add tech). Review: the borderline ones inside the drug pipeline, ML-centred roles filed under
+        other, and any that would be published but whose eligibility is unclear. Everything else is left
+        out, so the review queue stays short."""
+        if self.undergrad >= UNDERGRAD_SKIP or 0 <= self.us < US_SKIP:
+            return "skip"
         if self.computational >= FIT_MIN:
-            return "publish" if self.category in (*PIPELINE, "tech") else "review"
-        if self.computational >= REVIEW_MIN and self.category in PIPELINE:
-            return "review"
-        return "skip"
+            base = "publish" if self.category in (*PIPELINE, "tech") else "review"
+        elif self.computational >= REVIEW_MIN and self.category in PIPELINE:
+            base = "review"
+        else:
+            return "skip"
+        return "review" if self.eligibility_doubts() else base
+
+    def eligibility_doubts(self) -> list[str]:
+        out = []
+        if self.undergrad >= UNDERGRAD_REVIEW:
+            out.append(f"Unsure graduate students can apply ({round(self.undergrad * 100)}% undergraduate-only by {self.backend})")
+        if 0 <= self.us < US_REVIEW:
+            out.append(f"Unsure it's in the US ({round(self.us * 100)}% by {self.backend})")
+        return out
+
+    @property
+    def skip_reason(self) -> str:
+        if self.undergrad >= UNDERGRAD_SKIP:
+            return "undergraduate only"
+        if 0 <= self.us < US_SKIP:
+            return "not in the US"
+        return "not a fit"
+
+    def review_reason(self) -> str:
+        """Why staff are asked, shown on the review-queue item."""
+        why = self.eligibility_doubts()
+        if REVIEW_MIN <= self.computational < FIT_MIN:
+            why.append(f"Unsure ML or computational automation is central ({round(self.computational * 100)}% by "
+                       f"{self.backend}; {round(FIT_MIN * 100)}% needed to publish)")
+        elif self.computational >= FIT_MIN and self.category not in (*PIPELINE, "tech"):
+            why.append(f"ML/automation-focused, but outside drug discovery and development ({self.backend})")
+        text = ". ".join(why)
+        if self.backend == "llm" and self.note:
+            text += f". Claude: {self.note}"
+        return text
 
 
-def posting_text(title: str, company: str, description: str) -> str:
-    return f"Internship title: {title}\nCompany: {company}\n\n{(description or '').strip()[:TEXT_LIMIT]}"
+def posting_text(title: str, company: str, description: str, location: str = "") -> str:
+    where = f"\nLocation: {location}" if location else ""
+    return f"Internship title: {title}\nCompany: {company}{where}\n\n{(description or '').strip()[:TEXT_LIMIT]}"
 
 
 # --------------------------------------------------------------------------------------
@@ -181,12 +238,15 @@ def rules_classify(title: str, company: str, description: str) -> Verdict:
 
 
 # --------------------------------------------------------------------------------------
-# d3-flash
+# d3
 # --------------------------------------------------------------------------------------
 def _probs(answer) -> dict[str, float]:
     """The model card leaves the answer shape open; accept {"probabilities": {...}}, {"scores": {...}},
     a plain {option: p} mapping, a list of {"label"/"option", "probability"/"score"}, or a bare label."""
     if isinstance(answer, dict):
+        # the d3 family names the answer after its question type, e.g. {"type": "choice", "choice": {...}}
+        if isinstance(answer.get("type"), str) and isinstance(answer.get(answer["type"]), (dict, list)):
+            return _probs(answer[answer["type"]])
         for key in ("probabilities", "probs", "scores", "distribution", "options"):
             if isinstance(answer.get(key), (dict, list)):
                 return _probs(answer[key])
@@ -234,30 +294,54 @@ def best_choice(answer, options) -> tuple[str, float]:
 
 
 class D3:
-    def __init__(self, model_name: str = D3_MODEL, revision: str | None = os.environ.get("D3_REVISION") or None):
-        # on Apple silicon, let the few operations Metal doesn't support run on the CPU instead of failing
-        os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
-        import torch
-        from transformers import AutoModel
-        self.device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
-        dtype = torch.float32 if self.device == "cpu" else torch.bfloat16
-        if self.device == "cpu":
-            log.warning("d3: no GPU found; classifying on the CPU is slow (minutes per posting)")
-        log.info("d3: loading %s on %s (first run downloads about 17 GB)", model_name, self.device)
-        self.model = AutoModel.from_pretrained(model_name, trust_remote_code=True, dtype=dtype, revision=revision)
-        self.model.to(self.device).eval()
+    """vllm-sr/d3, asked over HTTP: the model runs in scraper/d3_server.py on this computer's GPU.
+    Construction checks the server answers, so an unreachable server is noticed once, before classifying."""
+
+    def __init__(self, url: str | None = None, session=None, timeout: float = 120.0):
+        import requests
+        self.url = (url or env("D3_URL") or D3_URL_DEFAULT).rstrip("/")
+        self.http = session or requests.Session()
+        self.timeout = timeout
+        try:
+            r = self.http.get(self.url + "/health", timeout=5)
+            info = r.json() if r.status_code == 200 else {}
+        except requests.exceptions.RequestException as e:
+            raise ConnectionError(f"the d3 server at {self.url} isn't answering ({type(e).__name__}). "
+                                  f"Start it with scraper\\start_d3_server.ps1 (or python scraper/d3_server.py)") from None
+        except ValueError:
+            info = {}
+        if not info.get("ok"):
+            raise ConnectionError(f"{self.url}/health didn't answer like the d3 server (HTTP {r.status_code})")
+        rev = str(info.get("revision") or "")
+        self.model = f"{info.get('model', 'd3')}@{rev[:12]}" if rev else str(info.get("model", "d3"))
+        log.info("d3: %s on %s (%s) at %s", self.model, info.get("device", "?"), info.get("gpu", "?"), self.url)
 
     def ask(self, state: str) -> dict:
         questions = {
             "computational": {"type": "noul", "instructions": COMPUTATIONAL_Q},
             "category": {"type": "choice", "instructions": CATEGORY_Q, "criteria": CATEGORIES},
+            "level": {"type": "choice", "instructions": LEVEL_Q, "criteria": LEVELS},
+            "us": {"type": "noul", "instructions": US_Q},
         }
-        return self.model.system_one(state=state, questions=questions)["answers"]
+        r = self.http.post(self.url + "/v1/systemone", json={"state": state, "questions": questions}, timeout=self.timeout)
+        if r.status_code != 200:
+            try:
+                err = r.json().get("error", "")
+            except ValueError:
+                err = r.text[:200]
+            raise RuntimeError(f"d3 server answered HTTP {r.status_code}: {err}")
+        return r.json()["answers"]
 
-    def classify(self, title: str, company: str, description: str) -> Verdict:
-        answers = self.ask(posting_text(title, company, description))
+    def classify(self, title: str, company: str, description: str, location: str = "") -> Verdict:
+        answers = self.ask(posting_text(title, company, description, location))
         cat, cp = best_choice(answers["category"], CATEGORIES)
-        return Verdict(round(p_yes(answers["computational"]), 3), cat, round(cp, 3), "d3")
+        level = {k: v for k, v in _probs(answers["level"]).items()}
+        undergrad = next((v for k, v in level.items() if k.strip().lower() == "undergrad_only"), None)
+        if undergrad is None:
+            undergrad = 1.0 - next((v for k, v in level.items() if k.strip().lower() == "graduate"), 1.0)
+        comp, us = p_yes(answers["computational"]), p_yes(answers["us"])
+        note = f"fit {comp:.0%}, {cat} {cp:.0%}, undergraduate-only {undergrad:.0%}, US {us:.0%}"
+        return Verdict(round(comp, 3), cat, round(cp, 3), "d3", note, undergrad=round(undergrad, 3), us=round(us, 3))
 
 
 # --------------------------------------------------------------------------------------
@@ -379,7 +463,7 @@ class LLM:
             why = f"couldn't connect to {host} ({type(e).__name__})"
         return False, why + (f". {VPN_HINT}." if self.needs_vpn else ".")
 
-    def classify(self, title: str, company: str, description: str) -> Verdict:
+    def classify(self, title: str, company: str, description: str, location: str = "") -> Verdict:
         msg = self.client.messages.create(
             model=self.model, max_tokens=1200, system=LLM_SYSTEM,
             tools=[LLM_TOOL], tool_choice={"type": "tool", "name": "record_assessment"},
@@ -400,30 +484,21 @@ class Classifier:
     """Picks the backend, caches verdicts by posting text, and falls back to rules per posting
     if the model errors on one."""
 
-    def __init__(self, backend: str = "auto", cache_path: str | None = CACHE_PATH, llm_client=None):
+    def __init__(self, backend: str = "auto", cache_path: str | None = CACHE_PATH, llm_client=None, d3_session=None):
         self.backend, self.d3, self.llm, self.cache_path = backend, None, None, cache_path
-        self.llm_failures, self._lock = 0, threading.Lock()
-        self.fallback_reason = ""   # why Claude wasn't used for this run, for the run summary
-        if backend == "llm" or (backend == "auto" and (llm_client is not None or llm_configured())):
+        self.llm_failures, self.d3_failures, self._lock = 0, 0, threading.Lock()
+        self.fallback_reason = ""   # why the model wasn't used (for some or all of this run), for the run summary
+        if backend == "llm":
+            self.llm = LLM(client=llm_client)
+            ok, why = self.llm.reachable()
+            if not ok:
+                raise ConnectionError(why)
+        elif backend in ("auto", "d3"):
             try:
-                self.llm = LLM(client=llm_client)
-                ok, why = self.llm.reachable()
-                if not ok:
-                    self.llm = None
-                    raise ConnectionError(why)
-            except Exception as e:  # SDK missing, bad settings, off the VPN...
-                if backend == "llm":
-                    raise
-                self.fallback_reason = str(e)[:300]
-                log.warning("Claude unavailable (%s: %s). Using the next classifier for this run.",
-                            e.__class__.__name__, str(e)[:300])
-        if self.llm is None and backend in ("auto", "d3"):
-            try:
-                self.d3 = D3()
-            except Exception as e:  # missing packages, no memory, no network...
-                if backend == "d3":
-                    raise
-                log.warning("d3-flash unavailable (%s: %s); using keyword rules", e.__class__.__name__, str(e)[:200])
+                self.d3 = D3(session=d3_session)
+            except Exception as e:  # server not started, still loading, wrong D3_URL...
+                self.fallback_reason = f"d3 not used: {str(e)[:280]}"
+                log.warning("d3 unavailable (%s). Using keyword rules for this run.", str(e)[:300])
         self.cache: dict[str, dict] = {}
         if cache_path and os.path.exists(cache_path):
             try:
@@ -436,33 +511,41 @@ class Classifier:
     def name(self) -> str:
         return "llm" if self.llm else "d3" if self.d3 else "rules"
 
-    def _key(self, title: str, company: str, description: str) -> str:
-        model = self.llm.model if self.llm else ""
-        return hashlib.sha256(f"{self.name}\n{model}\n{QUESTIONS_V}\n{posting_text(title, company, description)}".encode()).hexdigest()[:24]
+    def _key(self, title: str, company: str, description: str, location: str = "") -> str:
+        model = self.llm.model if self.llm else self.d3.model if self.d3 else ""
+        text = posting_text(title, company, description, location if self.d3 else "")
+        return hashlib.sha256(f"{self.name}\n{model}\n{QUESTIONS_V}\n{text}".encode()).hexdigest()[:24]
 
-    def warm(self, items: list[tuple[str, str, str]]) -> None:
-        """Classify the uncached (title, company, description) items ahead of time, several at once (llm only)."""
-        if not self.llm:
+    def warm(self, items: list[tuple], on_progress=None) -> None:
+        """Classify the uncached (title, company, description[, location]) items ahead of time, with progress
+        in the log: several at once for Claude, two at a time for d3 (its server answers one by one on the GPU)."""
+        if not (self.llm or self.d3):
             return
         todo = [it for it in dict.fromkeys(items) if self._key(*it) not in self.cache]
+        if on_progress:
+            on_progress(0, len(todo))
         if not todo:
             return
-        log.info("llm: classifying %d new or changed postings (%d at a time)", len(todo), LLM_WORKERS)
-        done = 0
+        who, workers = ("llm", LLM_WORKERS) if self.llm else ("d3", 2)
+        log.info("%s: classifying %d new or changed postings (%d at a time)", who, len(todo), workers)
+        done, started = 0, time.monotonic()
 
         def one(it):
             nonlocal done
             self.classify(*it)
             with self._lock:
                 done += 1
+                n = done
                 if done % 10 == 0 or done == len(todo):
-                    log.info("llm: %d/%d classified", done, len(todo))
+                    log.info("%s: %d/%d classified (%.1fs each)", who, done, len(todo), (time.monotonic() - started) / done)
+            if on_progress:
+                on_progress(n, len(todo))
 
-        with ThreadPoolExecutor(max_workers=max(1, LLM_WORKERS)) as pool:
+        with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
             list(pool.map(one, todo))
 
-    def classify(self, title: str, company: str, description: str) -> Verdict:
-        key = self._key(title, company, description)
+    def classify(self, title: str, company: str, description: str, location: str = "") -> Verdict:
+        key = self._key(title, company, description, location)
         if key in self.cache:
             return Verdict(**self.cache[key])
         v = None
@@ -481,11 +564,17 @@ class Classifier:
                 hint = f" {VPN_HINT}." if self.llm.needs_vpn and "Connection" in type(e).__name__ else ""
                 log.warning("llm failed on %r after %.0fs (%s: %s); keyword rules for it.%s", title,
                             time.monotonic() - started, e.__class__.__name__, str(e)[:200], hint)
-        elif self.d3:
+        elif self.d3 and self.d3_failures < 5:
             try:
-                v = self.d3.classify(title, company, description)
-            except Exception as e:
-                log.warning("d3 failed on %r (%s); using keyword rules for it", title, e)
+                v = self.d3.classify(title, company, description, location)
+            except Exception as e:   # server stopped mid-run, a timeout, an answer in an unexpected shape...
+                with self._lock:
+                    self.d3_failures += 1
+                    if self.d3_failures == 5:
+                        self.fallback_reason = f"5 d3 requests failed (last: {type(e).__name__}: {str(e)[:200]})"
+                        log.error("d3: 5 requests failed (last: %s: %s); keyword rules for the rest of this run",
+                                  e.__class__.__name__, str(e)[:300])
+                log.warning("d3 failed on %r (%s: %s); keyword rules for it", title, e.__class__.__name__, str(e)[:200])
         if v is None:
             v = rules_classify(title, company, description)
         if v.backend == self.name:   # don't cache a fallback answer under the model's key
@@ -507,7 +596,7 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("raw", nargs="?", help="a scraper run (--out NAME writes NAME.json), run with --details")
     ap.add_argument("--classifier", choices=["auto", "llm", "d3", "rules"], default="auto")
-    ap.add_argument("--check", action="store_true", help="load the model and classify one sample posting")
+    ap.add_argument("--check", action="store_true", help="ask the d3 server (or Claude, with --classifier llm) about one sample posting")
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
     if args.check and args.classifier == "llm":
@@ -530,15 +619,20 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(asdict(v) | {"decision": v.decision}, indent=2))
         return 0
     if args.check:
-        d3 = D3()
-        state = posting_text("2027 Summer Intern - Clinical Pharmacology Modeling", "Genentech",
-                             "Build population PK/PD models in R and NONMEM for Phase 2 trials and automate "
-                             "simulation workflows in Python.")
-        raw = d3.ask(state)
+        t, co, loc = "2027 Summer Intern - Clinical Pharmacology Modeling", "Genentech", "South San Francisco, CA"
+        d = ("Build population PK/PD models in R and NONMEM for Phase 2 trials and automate simulation workflows "
+             "in Python. Qualifications: pursuing a master's, PhD or PharmD; experience with R or Python.")
+        try:
+            d3 = D3()
+        except ConnectionError as e:
+            print(f"Can't reach d3: {e}")
+            return 1
+        started = time.monotonic()
+        raw = d3.ask(posting_text(t, co, d, loc))
+        print(f"answered in {time.monotonic() - started:.1f}s by {d3.model}")
         print("raw answers:", json.dumps(raw, indent=2, default=str)[:3000])
-        print("parsed:", d3.classify("2027 Summer Intern - Clinical Pharmacology Modeling", "Genentech",
-                                     "Build population PK/PD models in R and NONMEM for Phase 2 trials and automate "
-                                     "simulation workflows in Python."))
+        v = d3.classify(t, co, d, loc)
+        print("parsed:", json.dumps(asdict(v) | {"decision": v.decision}, indent=2))
         return 0
     if not args.raw:
         ap.error("give a scraper JSON file, or --check")
@@ -546,7 +640,7 @@ def main(argv: list[str] | None = None) -> int:
         rows = json.load(f)
     clf = Classifier(args.classifier)
     for p in rows:
-        v = clf.classify(p["title"], p["company"], p.get("description", ""))
+        v = clf.classify(p["title"], p["company"], p.get("description", ""), p.get("location", ""))
         print(f"{v.decision:<8} {v.computational:>5.2f}  {v.category:<11} {p['company'][:14]:<14} {p['title'][:70]}")
     clf.save()
     return 0

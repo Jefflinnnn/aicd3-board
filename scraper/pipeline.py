@@ -3,9 +3,11 @@
 One command from career sites to the job board:
 
   1. scrape    every tracked company's US internships, with full descriptions
-  2. classify  each one (scraper/classify.py, vllm-sr/d3-flash or keyword rules):
-                 computational work?   yes -> publish,  unsure -> staff review queue,  no -> left out
-                 area                  discovery | development | tech | other
+  2. classify  each one (scraper/classify.py: vllm-sr/d3 on this PC's GPU through scraper/d3_server.py, or
+               keyword rules with a warning if that server isn't answering):
+                 undergraduate only / outside the US?   left out (unsure -> staff review queue)
+                 fit for AICD3 (ML/computational work)?  yes -> publish,  unsure -> staff review queue,  no -> left out
+                 area                                    discovery | development | tech | other
   3. import    into the app's database through POST /api/ingest; postings already on the board are
                updated, ones a company has taken down since the last run are marked closed
   4. check     every open posting's own page (check_open.py) and close or flag what's gone
@@ -35,7 +37,8 @@ from datetime import datetime
 import requests
 
 import pharma_internships as pi
-from classify import FIT_MIN, Classifier
+import progress as live
+from classify import Classifier
 
 log = logging.getLogger("pipeline")
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -59,24 +62,35 @@ def read_env(names: tuple[str, ...]) -> str:
     return ""
 
 
-def build_records(postings: list[pi.Posting], clf: Classifier) -> tuple[list[dict], list[dict]]:
+def where(p: pi.Posting) -> str:
+    return " | ".join(x for x in [*(p.locations or []), p.location] if x)[:400]
+
+
+def build_records(postings: list[pi.Posting], clf: Classifier, on_progress=None) -> tuple[list[dict], list[dict]]:
     """Import records for the app, and one report row per posting."""
     records, report = [], []
-    # Claude classifies the new or changed ones several at a time first; the loop below then reads its cache
-    clf.warm([(p.title, p.company, p.description) for p in postings if not pi.undergrad_only(p.title, p.description)])
+    # the model classifies the new or changed ones first (Claude several at a time); the loop below reads its cache
+    clf.warm([(p.title, p.company, p.description, where(p)) for p in postings if not pi.undergrad_only(p.title, p.description)],
+             on_progress=on_progress)
     for p in postings:
         if pi.undergrad_only(p.title, p.description):
             # UCSF students are graduate and professional students: undergraduate-only roles and co-ops are
             # left out (and moved to the bin if an earlier run published them), without asking the classifier
             report.append({"decision": "undergrad", "computational": "", "category": "", "category_p": "",
-                           "backend": "rules", "company": p.company, "title": p.title, "url": p.url,
-                           "note": "undergraduate only"})
+                           "undergrad_p": "", "us_p": "", "backend": "rules", "company": p.company, "title": p.title,
+                           "url": p.url, "note": "undergraduate only (keyword rules)"})
             records.append({**pi.to_import_record(p), "fit": "no"})
             continue
-        v = clf.classify(p.title, p.company, p.description)
-        report.append({"decision": v.decision, "computational": v.computational, "category": v.category,
-                       "category_p": v.category_p, "backend": v.backend, "company": p.company, "title": p.title,
-                       "url": p.url, "note": v.note})
+        v = clf.classify(p.title, p.company, p.description, where(p))
+        decision = v.decision
+        if decision == "skip" and v.skip_reason == "undergraduate only":
+            decision = "undergrad"
+        elif decision == "skip" and v.skip_reason == "not in the US":
+            decision = "not_us"
+        report.append({"decision": decision, "computational": v.computational, "category": v.category,
+                       "category_p": v.category_p, "undergrad_p": "" if v.undergrad < 0 else v.undergrad,
+                       "us_p": "" if v.us < 0 else v.us, "backend": v.backend, "company": p.company,
+                       "title": p.title, "url": p.url, "note": v.note})
         rec = pi.to_import_record(p)
         rec["category"] = v.category
         # Claude's own reading of the posting, when it wrote one (better than heading-matching on odd formats)
@@ -92,13 +106,7 @@ def build_records(postings: list[pi.Posting], clf: Classifier) -> tuple[list[dic
             records.append({**rec, "fit": "no"})
             continue
         if v.decision == "review":
-            rec["review_reason"] = (
-                f"ML/automation-focused, but outside drug discovery and development ({v.backend})"
-                if v.computational >= FIT_MIN else
-                f"Unsure ML or computational automation is central ({round(v.computational * 100)}% by {v.backend}; "
-                f"{round(FIT_MIN * 100)}% needed to publish)")
-            if v.backend == "llm" and v.note:
-                rec["review_reason"] += f". Claude: {v.note}"
+            rec["review_reason"] = v.review_reason()
         records.append(rec)
     return records, report
 
@@ -131,6 +139,8 @@ def ingest(url: str, token: str, records: list[dict], dry_run: bool) -> dict:
 LOG_DIR = os.path.join(ROOT, "scraper", "out", "logs")
 KEEP_LOGS = 30
 _step = {"name": "starting", "at": time.monotonic(), "t0": time.monotonic()}
+_run: dict = {"progress": None, "summary": None}   # this run's live progress reporter and final counts, for main()
+STOPPED = 130   # exit code when staff stopped the run from the Admin page
 
 
 class _Tee:
@@ -188,7 +198,29 @@ def step(name: str, detail: str = "") -> None:
     print(f"\n[step] {name}{' - ' + detail if detail else ''}  ({datetime.now():%H:%M:%S})", flush=True)
 
 
+def _tail(path: str, lines: int = 400) -> str:
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            return "".join(f.readlines()[-lines:])
+    except OSError:
+        return ""
+
+
+def _report_end(code: int, log_path: str) -> None:
+    """Tell the app how the run ended (it draws the run's last state and keeps its log)."""
+    prog = _run["progress"]
+    if not prog:
+        return
+    status = {0: "succeeded", 2: "partial", STOPPED: "cancelled"}.get(code, "failed")
+    try:
+        sys.stdout.flush()
+        prog.finish(status, _run["summary"], _tail(log_path))
+    except Exception as e:   # never let reporting change how the run ends
+        print(f"[warning] couldn't report the end of the run to the app: {e}", flush=True)
+
+
 def main(argv: list[str] | None = None) -> int:
+    _run.update(progress=None, summary=None)
     log_path = _open_log()
     print(f"[run] pipeline started {datetime.now():%Y-%m-%d %H:%M:%S}  python {sys.version.split()[0]}  "
           f"args: {' '.join(argv if argv is not None else sys.argv[1:]) or '(none)'}", flush=True)
@@ -197,26 +229,35 @@ def main(argv: list[str] | None = None) -> int:
         code = _main(argv)
     except KeyboardInterrupt:
         print(f"\n[run] STOPPED during step: {_step['name']}", flush=True)
+        _report_end(STOPPED, log_path)
         raise
     except SystemExit as e:   # argparse errors, "Import failed: ..." and other deliberate exits
         code = e.code if isinstance(e.code, int) else 1
         if code:
             if e.code and not isinstance(e.code, int):
                 print(f"[error] {e.code}", file=sys.stderr, flush=True)
-            print(f"\n[run] FAILED during step: {_step['name']} (exit {code})", flush=True)
+            print(f"\n[run] {'STOPPED from the Admin page' if code == STOPPED else 'FAILED'} during step: {_step['name']} (exit {code})", flush=True)
             print(f"[run] full log: {log_path}", flush=True)
+        _report_end(code, log_path)
         return code
     except Exception as e:
         traceback.print_exc()
         print(f"\n[run] FAILED during step: {_step['name']}: {type(e).__name__}: {e}", flush=True)
         print(f"[run] full log: {log_path}", flush=True)
+        _report_end(1, log_path)
         return 1
     total = _mins(time.monotonic() - _step["t0"])
     print(f"[step] {_step['name']} done in {_mins(time.monotonic() - _step['at'])}", flush=True)
     print(f"\n[run] {'finished' if code == 0 else 'finished with problems (some companies could not be scraped)'} "
           f"in {total} (exit {code})", flush=True)
     print(f"[run] full log: {log_path}", flush=True)
+    _report_end(code, log_path)
     return code
+
+
+def _stop_if_asked(prog: live.Progress) -> None:
+    if prog.stop_requested:
+        raise SystemExit(STOPPED)
 
 
 def _main(argv: list[str] | None = None) -> int:
@@ -229,6 +270,8 @@ def _main(argv: list[str] | None = None) -> int:
     ap.add_argument("--workers", type=int, default=5)
     ap.add_argument("--out", default=os.path.join(ROOT, "scraper", "out", "pipeline"))
     ap.add_argument("--summary-json", metavar="PATH", help="also write the run's counts as JSON (the app's Refresh button reads it)")
+    ap.add_argument("--trigger", choices=["manual", "schedule"], default="manual",
+                    help="how the Admin page labels this run (the daily scheduled task passes schedule)")
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
 
@@ -244,17 +287,31 @@ def _main(argv: list[str] | None = None) -> int:
         if not names:
             ap.error(f"no company matches {args.companies}")
 
+    # live progress for the Admin page (the refresh Sankey); also refuses to start beside another refresh
+    prog = live.from_env(args.url, token, names, trigger=args.trigger, dry_run=args.dry_run)
+    try:
+        prog.start()
+    except live.AlreadyRunning as e:
+        print(f"Not starting: {e}. Try again when it has finished.", file=sys.stderr)
+        return 3
+    _run["progress"] = prog
+
     step("1/4 scrape", f"{len(names)} companies: {', '.join(names)}")
     client = pi.PoliteClient()
     postings, status = pi.run(names, details=True, us_only=True, client=client, workers=max(1, min(args.workers, 6)),
-                              ignore_robots=True)
+                              ignore_robots=True, on_company=prog.company)
+    _stop_if_asked(prog)
     step("2/4 classify", f"{len(postings)} postings")
+    prog.step("classify")
     clf = Classifier(args.classifier)
+    prog.classifier(clf.name)
     print(f"classifier: {clf.name}", flush=True)
     if clf.fallback_reason:
-        print(f"[warning] Claude not used: {clf.fallback_reason}", flush=True)
-    records, report = build_records(postings, clf)
+        print(f"[warning] {clf.fallback_reason}", flush=True)
+    records, report = build_records(postings, clf, on_progress=prog.classify)
+    prog.classify(len(postings), len(postings))
     clf.save()
+    _stop_if_asked(prog)
 
     os.makedirs(args.out, exist_ok=True)
     with open(os.path.join(args.out, "import.json"), "w", encoding="utf-8") as f:
@@ -264,16 +321,18 @@ def _main(argv: list[str] | None = None) -> int:
         w.writeheader()
         w.writerows(sorted(report, key=lambda r: (r["decision"], r["company"], r["title"])))
 
+    counts = {d: sum(1 for r in report if r["decision"] == d) for d in ("publish", "review", "skip", "undergrad", "not_us")}
+    prog.outcome(counts)
     step("3/4 import", f"{len(records)} records to {args.url}{' (dry run)' if args.dry_run else ''}")
+    prog.step("import")
     data = ingest(args.url, token, records, args.dry_run)
 
-    counts = {d: sum(1 for r in report if r["decision"] == d) for d in ("publish", "review", "skip", "undergrad")}
     print(f"\n{datetime.now():%Y-%m-%d %H:%M}  classifier: {clf.name}")
     for name, s in status.items():
         print(f"  {name:<24} {s}")
     print(f"\n{len(postings)} US internships scraped: {counts['publish']} computational, {counts['review']} unsure "
-          f"(to review), {counts['skip']} left out as not ML/automation-focused, "
-          f"{counts['undergrad']} left out as undergraduate-only (see fit.csv)")
+          f"(to review), {counts['skip']} left out as not a fit for AICD3, "
+          f"{counts['undergrad']} left out as undergraduate-only, {counts['not_us']} left out as outside the US (see fit.csv)")
     print(("Dry run, nothing saved: " if args.dry_run else "Database: ") +
           f"{data['added']} published, {data['staged']} to review, {data['updated']} updated, "
           f"{data['closed']} closed, {data['unchanged']} unchanged, {data['rejected']} previously rejected, "
@@ -285,7 +344,9 @@ def _main(argv: list[str] | None = None) -> int:
     checked = None
     checked_error = None
     if not args.no_check and not args.dry_run:
+        _stop_if_asked(prog)
         step("4/4 re-check open postings")
+        prog.step("check")
         import check_open
         os.environ["AICD3_INGEST_TOKEN"] = token
         print("\nRe-checking open postings…", flush=True)
@@ -305,13 +366,16 @@ def _main(argv: list[str] | None = None) -> int:
             checked = {k: sum(1 for r in res if r["status"] == k) for k in ("open", "closed", "unknown")}
         except (OSError, ValueError):
             pass
+    prog.checked(checked)
     bad = [n for n, s in status.items() if s.startswith(("BLOCKED", "UNAVAILABLE", "error"))]
+    summary = {"classifier": clf.name, "classifierNote": clf.fallback_reason, "scraped": len(postings), **counts,
+               "database": {k: data.get(k, 0) for k in ("added", "staged", "updated", "closed", "unchanged", "rejected", "dropped", "unlisted")},
+               "errors": len(data.get("errors", [])), "checked": checked, "checkError": checked_error,
+               "companies": status, "failed": bad, "dryRun": args.dry_run}
+    _run["summary"] = summary
     if args.summary_json:
         with open(args.summary_json, "w", encoding="utf-8") as f:
-            json.dump({"classifier": clf.name, "classifierNote": clf.fallback_reason, "scraped": len(postings), **counts,
-                       "database": {k: data.get(k, 0) for k in ("added", "staged", "updated", "closed", "unchanged", "rejected", "dropped", "unlisted")},
-                       "errors": len(data.get("errors", [])), "checked": checked, "checkError": checked_error,
-                       "companies": status, "failed": bad}, f)
+            json.dump(summary, f)
     return 2 if bad else 0
 
 

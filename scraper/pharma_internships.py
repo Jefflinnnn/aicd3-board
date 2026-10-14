@@ -1421,11 +1421,20 @@ CLUSTER_CAP = 2  # at most this many companies at once on one Workday data centr
 
 
 def run(companies: list[str], details: bool, us_only: bool, client: PoliteClient,
-        workers: int = 1, ignore_robots: bool = False) -> tuple[list[Posting], dict]:
+        workers: int = 1, ignore_robots: bool = False, on_company=None) -> tuple[list[Posting], dict]:
     """Scrape each company. With workers > 1, companies run side by side, each with its own
     client, so every site still sees only one request at a time at the polite pace.
-    With ignore_robots, a company's `robots_disallowed` route (if any) is tried first."""
+    With ignore_robots, a company's `robots_disallowed` route (if any) is tried first.
+    on_company(name, state, found, note), if given, hears "running" when a company starts and "done"
+    (with the number of postings) or "failed" (with why) when it ends; its errors never stop the scrape."""
     status: dict[str, str] = {}
+
+    def tell(name: str, state: str, found: int | None = None, note: str = "") -> None:
+        if on_company:
+            try:
+                on_company(name, state, found, note)
+            except Exception as e:  # reporting progress must never break scraping
+                log.debug("progress callback failed: %s", e)
     caps: dict[str, threading.Semaphore] = {}
     lock = threading.Lock()
 
@@ -1438,6 +1447,7 @@ def run(companies: list[str], details: bool, us_only: bool, client: PoliteClient
             if cfg.get("impersonate"):
                 c = c.impersonating()
             log.info("== %s (%s)", name, cfg["platform"])
+            tell(name, "running")
             fallbacks = cfg.get("fallback") or []
             fallbacks = [fallbacks] if isinstance(fallbacks, dict) else fallbacks   # one source, or several in order
             attempts = [(cfg, "")] + [({**fb, "id": cfg.get("id")}, " via " + fb.get("label", fb["platform"])) for fb in fallbacks]
@@ -1455,6 +1465,7 @@ def run(companies: list[str], details: bool, us_only: bool, client: PoliteClient
                         found = [p for p in found if req.search(f"{p.title}\n{p.description}")]
                     status[name] = f"ok ({len(found)}){via}"
                     log.info("   %s: %d internship postings%s", name, len(found), via)
+                    tell(name, "done", len(found), via.strip())
                     return found
                 except UnavailableError as e:
                     problems.append("UNAVAILABLE - down for maintenance, try later")
@@ -1468,6 +1479,7 @@ def run(companies: list[str], details: bool, us_only: bool, client: PoliteClient
                 if acfg is not attempts[-1][0]:
                     log.warning("   %s: trying the next source", name)
             status[name] = problems[0] if problems else "error"
+            tell(name, "failed", 0, status[name])
             return []
 
     results: list[Posting] = []
