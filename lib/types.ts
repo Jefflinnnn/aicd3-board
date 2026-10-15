@@ -118,4 +118,8 @@ export interface RefreshStatus {
    * (up) and what it runs, or the address it was looked for at; canSetup: why this server can't set up d3, or null.
    */
   classifier: { d3: boolean; revision: string; server: { up: boolean; detail: string }; canSetup: string | null }
+  /** whether this server's own timer runs automatic refreshes (never on Vercel: the GPU PC's scheduled task does) */
+  schedulerHere: boolean
+  /** the latest scheduled run, wherever it ran (the GPU PC's task or this server's timer) */
+  lastScheduled: { at: number; status: RefreshRun["status"]; host: string | null } | null
 }

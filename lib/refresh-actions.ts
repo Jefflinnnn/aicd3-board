@@ -36,18 +36,19 @@ export async function getRefreshStatus(): Promise<RefreshStatus> {
     return await readStatus()
   } catch (e) {
     const problem = schemaProblem(e)
-    if (problem) return { problem, autoRefresh: false, everyHours: 24, nextAt: null, runs: [], classifier: { ...classifierInfo(), server: await d3Server() } }
+    if (problem) return { problem, autoRefresh: false, everyHours: 24, nextAt: null, runs: [], classifier: { ...classifierInfo(), server: await d3Server() }, schedulerHere: schedulerHere(), lastScheduled: null }
     throw e
   }
 }
 
 async function readStatus(): Promise<RefreshStatus> {
   await sweepDeadRuns()
-  const [meta, runs, next, server] = await Promise.all([
+  const [meta, runs, next, server, sched] = await Promise.all([
     db().siteMeta.findUnique({ where: { id: 1 } }),
     db().scrapeRun.findMany({ orderBy: { startedAt: "desc" }, take: 6 }),
     nextScheduled(),
     d3Server(),
+    db().scrapeRun.findFirst({ where: { trigger: "schedule" }, orderBy: { startedAt: "desc" } }),
   ])
   const ids = [...new Set(runs.map((r) => r.requestedBy).filter((x): x is string => !!x))]
   const people = ids.length ? await db().profile.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, email: true } }) : []
@@ -59,7 +60,18 @@ async function readStatus(): Promise<RefreshStatus> {
     nextAt: next?.getTime() ?? null,
     runs: runs.map((r) => toRun(r, names)),
     classifier: { ...classifierInfo(), server },
+    schedulerHere: schedulerHere(),
+    lastScheduled: sched ? { at: sched.startedAt.getTime(), status: sched.status as RefreshRun["status"], host: hostOf(sched.summary) } : null,
   }
+}
+
+/** This server's own timer only runs where Python can (not on Vercel) and when it isn't switched off. */
+const schedulerHere = () => !process.env.VERCEL && process.env.SCRAPER_SCHEDULER !== "off"
+/** The computer a run happened on: in its summary while it runs, in its progress once it has finished. */
+function hostOf(summary: unknown): string | null {
+  const s = summary as { host?: unknown; progress?: { host?: unknown } } | null
+  const h = s?.host ?? s?.progress?.host
+  return typeof h === "string" ? h : null
 }
 
 export async function refreshNow(): Promise<{ started: boolean }> {

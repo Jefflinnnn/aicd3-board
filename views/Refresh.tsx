@@ -21,6 +21,8 @@ const STATUS: Record<RefreshRun["status"], { label: string; cls: string }> = {
   failed: { label: "Failed", cls: "bg-destructive/10 text-destructive" },
   cancelled: { label: "Stopped", cls: "bg-muted text-muted-foreground" },
 }
+/** no automatic refresh for over a day (the GPU PC refreshes twice a day, at 9 AM and 9 PM) */
+const stale = (last: { at: number } | null, now: number) => !!now && (!last || now - last.at > 864e5)
 const when = (t: number) => new Date(t).toLocaleString("en-US", { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
 function took(r: RefreshRun) {
   const ms = (r.finishedAt ?? Date.now()) - r.startedAt
@@ -131,6 +133,19 @@ export function Refresh() {
         </p>
       )}
 
+      {st && !st.schedulerHere ? (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b pb-3 text-sm">
+          <span>
+            Automatic refresh runs from the GPU PC&apos;s scheduled task (scraper\register_daily_refresh.ps1), not from this server.
+          </span>
+          <span className={cn("basis-full text-xs", stale(st.lastScheduled, now) ? "text-warn" : "text-muted-foreground")}>
+            {!st.lastScheduled
+              ? "No automatic refresh has reached this site yet. Set up the scheduled task on the GPU PC (see the README)."
+              : `Last automatic refresh ${when(st.lastScheduled.at)}${st.lastScheduled.host ? ` on ${st.lastScheduled.host}` : ""}: ${st.lastScheduled.status}.` +
+                (stale(st.lastScheduled, now) ? " That's more than a day ago: check that the PC is on and signed in (scraper\\register_daily_refresh.ps1 -Status)." : "")}
+          </span>
+        </div>
+      ) : (
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b pb-3">
         <Switch id="auto-refresh" checked={!!st?.autoRefresh} disabled={busy || !st} onCheckedChange={(on) => act(() => setAutoRefresh(on, 24), on ? "Will refresh every day" : "Automatic refresh off")} />
         <Label htmlFor="auto-refresh" className="cursor-pointer">Refresh automatically {every}</Label>
@@ -139,6 +154,7 @@ export function Refresh() {
           {st?.autoRefresh && " (while this server is running)"}
         </span>
       </div>
+      )}
 
       {st && (
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-b py-3 text-sm">
