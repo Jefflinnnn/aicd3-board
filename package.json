@@ -16,6 +16,7 @@
     "postinstall": "prisma generate",
     "db:migrate": "prisma migrate dev && prisma generate",
     "db:deploy": "prisma migrate deploy",
+    "db:deploy:web": "node scripts/migrate-web.mjs",
     "db:studio": "prisma studio",
     "grant-access": "tsx scripts/grant-access.ts",
     "test": "node --conditions=react-server --import tsx --test tests/*.test.mts",

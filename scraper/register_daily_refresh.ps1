@@ -1,23 +1,51 @@
-# Registers the daily job data refresh on this PC as a Windows scheduled task ("AICD3 daily refresh"), which
-# runs scraper\daily_refresh.ps1: scrape, classify with d3, and update the live site. Run it once:
+# Registers the scheduled job data refresh on this PC as a Windows scheduled task ("AICD3 daily refresh", the name
+# kept from when it ran daily), which runs scraper\daily_refresh.ps1: scrape, classify with d3, and update the live
+# site directly. No local server (pnpm dev / pnpm start) is needed. Run it once:
 #
 #   powershell -ExecutionPolicy Bypass -File scraper\register_daily_refresh.ps1 -Url https://<your-live-site>
-#   ... -At 6:47AM          # another time of day (default 6:47 AM)
-#   ... -Remove             # stop the daily refresh
+#   ... -At 9:00AM,9:00PM                # times of day (default 9 AM and 9 PM); one or more
+#   ... -Days Daily                      # which days (default every day); or day names, e.g. -Days Monday,Thursday
+#   ... -Status                          # is it registered, when did it last run and how did it go
+#   ... -Remove                          # stop the scheduled refresh
 #
 # Before registering, it checks that SCRAPER_INGEST_TOKEN in .env.local is the same value as the live site's
 # (Vercel -> Settings -> Environment Variables -> Production), without printing it.
-# The task runs while you're signed in to Windows (no password is stored); if the PC was off or asleep at
-# that time, it runs as soon as it can. Only one refresh runs at a time.
-param([string]$Url = "", [string]$At = "6:47AM", [switch]$Remove)
+# The task runs while you're signed in to Windows (a locked screen is fine; no password is stored). It wakes the PC
+# from sleep to run; if the PC was off or you were signed out at that time, it runs as soon as it can after you sign in.
+# Only one refresh runs at a time.
+#
+# It also registers "AICD3 refresh requests", which checks every 5 minutes (without a window and without waking the
+# PC) whether someone pressed Refresh now on the live site's Admin page, and if so runs the same d3 refresh
+# (scraper\refresh_requests.ps1). It waits while another refresh is running, so it never overlaps the scheduled ones.
+param([string]$Url = "", [string[]]$At = @("9:00AM", "9:00PM"), [string[]]$Days = @("Daily"), [switch]$Remove, [switch]$Status)
 $ErrorActionPreference = "Stop"
 $Root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $TaskName = "AICD3 daily refresh"
+# checks every 5 minutes for "Refresh now" pressed on the live site's Admin page (scraper\refresh_requests.ps1)
+$RequestTask = "AICD3 refresh requests"
 $EnvFile = Join-Path $Root ".env.local"
+
+if ($Status) {
+  $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+  if (-not $task) { Write-Host "The scheduled refresh isn't registered on this PC. Register it with -Url https://<your-live-site>." }
+  else {
+    $info = Get-ScheduledTaskInfo -TaskName $TaskName
+    $when = ($task.Triggers | ForEach-Object { "$(if ($_.DaysOfWeek) { 'weekly' } else { 'daily' }) at $(([datetime]$_.StartBoundary).ToString('h:mm tt'))" }) -join ", "
+    $result = if ($info.LastTaskResult -eq 0) { "succeeded" } elseif ($info.LastTaskResult -eq 267011) { "never run yet" } else { "exit code $($info.LastTaskResult)" }
+    Write-Host "Task '$TaskName': $($task.State) ($when). Last run: $($info.LastRunTime) ($result). Next run: $($info.NextRunTime)."
+  }
+  $req = Get-ScheduledTask -TaskName $RequestTask -ErrorAction SilentlyContinue
+  if ($req) { Write-Host "Task '$RequestTask': $($req.State) (checks every 5 minutes for Refresh now on the Admin page; last check $((Get-ScheduledTaskInfo -TaskName $RequestTask).LastRunTime))." }
+  else { Write-Host "Task '$RequestTask' isn't registered: Refresh now on the live site's Admin page won't be picked up. Run this script with -Url to add it." }
+  $log = Join-Path $Root "scraper\out\logs\daily-refresh.log"
+  if (Test-Path $log) { Write-Host "Recent runs:"; Get-Content $log -Tail 8 } else { Write-Host "No runs logged yet ($log)." }
+  exit 0
+}
 
 if ($Remove) {
   Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
-  Write-Host "Removed the '$TaskName' task. The PC no longer refreshes the live site on its own."
+  Unregister-ScheduledTask -TaskName $RequestTask -Confirm:$false -ErrorAction SilentlyContinue
+  Write-Host "Removed the '$TaskName' and '$RequestTask' tasks. The PC no longer refreshes the live site, on a schedule or on request."
   exit 0
 }
 
@@ -48,9 +76,11 @@ try {
   $n = (ConvertFrom-Json $r.Content).postings.Count
   Write-Host "The live site accepted this PC's token ($n open postings on the board)."
 } catch {
-  $status = $_.Exception.Response.StatusCode.value__
-  if ($status -eq 401) { Write-Host "The live site refused the token: SCRAPER_INGEST_TOKEN in .env.local isn't the same as Vercel's Production value. Copy Vercel's value into .env.local, then run this again." }
-  elseif ($status -eq 503) { Write-Host "The live site has no SCRAPER_INGEST_TOKEN set (Vercel -> Settings -> Environment Variables -> Production). Add it there, redeploy, then run this again." }
+  # named $httpStatus because PowerShell names are case-insensitive and $Status is the -Status switch
+  $httpStatus = $_.Exception.Response.StatusCode.value__
+  if ($httpStatus -eq 404) { Write-Host "$Url answered 404 Not Found for /api/ingest/open: that isn't the real job board. Use the address students sign in at (Vercel -> the real project, not the demo -> Settings -> Domains). The public demo has no import endpoint." }
+  elseif ($httpStatus -eq 401) { Write-Host "The live site refused the token: SCRAPER_INGEST_TOKEN in .env.local isn't the same as Vercel's Production value. Copy Vercel's value into .env.local, then run this again." }
+  elseif ($httpStatus -eq 503) { Write-Host "The live site has no SCRAPER_INGEST_TOKEN set (Vercel -> Settings -> Environment Variables -> Production). Add it there, redeploy, then run this again." }
   else { Write-Host "Couldn't reach $Url/api/ingest/open ($($_.Exception.Message)). Check the address." }
   exit 1
 }
@@ -59,15 +89,37 @@ Set-EnvLine "AICD3_URL" $Url
 $runner = Join-Path $Root "scraper\daily_refresh.ps1"
 $action = New-ScheduledTaskAction -Execute "powershell.exe" -WorkingDirectory $Root `
   -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$runner`""
-$trigger = New-ScheduledTaskTrigger -Daily -At $At
-$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew `
+$Days = @($Days | ForEach-Object { $_ -split "," } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+$At = @($At | ForEach-Object { $_ -split "," } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+$trigger = @()
+foreach ($t in $At) {
+  try { $null = [datetime]::Parse($t) } catch { Write-Host "-At takes times such as 9:00AM,9:00PM (got $t)."; exit 1 }
+  if ($Days.Count -eq 1 -and $Days[0] -eq "Daily") { $trigger += New-ScheduledTaskTrigger -Daily -At $t }
+  else {
+    try { $trigger += New-ScheduledTaskTrigger -Weekly -DaysOfWeek $Days -At $t }
+    catch { Write-Host "-Days takes day names such as Monday,Thursday (or Daily)."; exit 1 }
+  }
+}
+$schedule = "$(if ($Days.Count -eq 1 -and $Days[0] -eq 'Daily') { 'every day' } else { 'every ' + ($Days -join ' and ') }) at $($At -join ' and ')"
+$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -WakeToRun -MultipleInstances IgnoreNew `
   -ExecutionTimeLimit (New-TimeSpan -Hours 4) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
 $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited
 Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal `
   -Description "Scrapes internships, classifies them with vllm-sr/d3 on this PC, and updates the AICD3 job board at $Url" -Force | Out-Null
 
+# "Refresh now" on the live site: check every 5 minutes, with no window (run_hidden.vbs) and without waking the PC
+$reqAction = New-ScheduledTaskAction -Execute "wscript.exe" -WorkingDirectory $Root `
+  -Argument "//B `"$(Join-Path $Root 'scraper\run_hidden.vbs')`" `"$(Join-Path $Root 'scraper\refresh_requests.ps1')`""
+$reqTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 5)
+$reqLogon = New-ScheduledTaskTrigger -AtLogOn -User "$env:USERDOMAIN\$env:USERNAME"
+$reqSettings = New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew `
+  -ExecutionTimeLimit (New-TimeSpan -Hours 4) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+Register-ScheduledTask -TaskName $RequestTask -Action $reqAction -Trigger @($reqTrigger, $reqLogon) -Settings $reqSettings -Principal $principal `
+  -Description "Checks every 5 minutes whether Refresh now was pressed on the AICD3 job board's Admin page ($Url) and runs it with d3" -Force | Out-Null
+
 $next = (Get-ScheduledTaskInfo -TaskName $TaskName).NextRunTime
-Write-Host "Registered '$TaskName': every day at $At (next run $next), updating $Url."
-Write-Host "Try it now:            Start-ScheduledTask -TaskName '$TaskName'"
-Write-Host "Check how runs went:   Get-Content scraper\out\logs\daily-refresh.log -Tail 10"
+Write-Host "Registered '$TaskName': $schedule (next run $next), updating $Url. No local server needs to run."
+Write-Host "Registered '$RequestTask': every 5 minutes it picks up Refresh now from the live site's Admin page."
+Write-Host "Refresh now, from here: powershell -ExecutionPolicy Bypass -File scraper\daily_refresh.ps1 -Manual"
+Write-Host "Check how runs went:   powershell -ExecutionPolicy Bypass -File scraper\register_daily_refresh.ps1 -Status"
 Write-Host "Stop it:               powershell -ExecutionPolicy Bypass -File scraper\register_daily_refresh.ps1 -Remove"

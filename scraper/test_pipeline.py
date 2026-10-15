@@ -320,5 +320,57 @@ class Pipeline(unittest.TestCase):
             self.assertTrue(os.path.exists(os.path.join(d, "fit.csv")))
 
 
+class RequireD3(unittest.TestCase):
+    """The GPU PC's scheduled refresh (--require-d3): only d3 decides."""
+    postings = Pipeline.postings
+
+    def run_main(self, d3=None, fail_d3=False):
+        posted = []
+        fake_post = lambda url, data=None, headers=None, timeout=None: posted.append(url) or mock.Mock(
+            status_code=200, json=lambda: {"added": 0, "staged": 0, "updated": 0, "closed": 0, "unchanged": 0, "rejected": 0, "errors": []})
+        scraped = mock.Mock(return_value=(self.postings(), {"Gilead Sciences": "ok (3)"}))
+        patches = [mock.patch.object(pi, "run", scraped), mock.patch.object(pipeline.requests, "post", side_effect=fake_post),
+                   mock.patch.dict(os.environ, {"AICD3_INGEST_TOKEN": "t0k"})]
+        if d3 is not None:
+            patches.append(mock.patch.object(c, "D3", return_value=d3))
+        with tempfile.TemporaryDirectory() as out:
+            for p in patches:
+                p.start()
+            try:
+                with mock.patch.object(c, "CACHE_PATH", None), mock.patch.object(c.Classifier, "save"):
+                    code = pipeline.main(["--require-d3", "--no-check", "--out", out, "--url", "http://localhost:3000"])
+            finally:
+                for p in reversed(patches):
+                    p.stop()
+        return code, scraped.called, posted
+
+    def test_d3_down_stops_before_scraping_and_changes_nothing(self):
+        code, scraped, posted = self.run_main()   # module-level patch: d3 unreachable
+        self.assertEqual((code, scraped, posted), (1, False, []))
+
+    def test_d3_failing_partway_imports_nothing(self):
+        d3 = mock.Mock(model="vllm-sr/d3@abc", classify=mock.Mock(side_effect=RuntimeError("CUDA out of memory")))
+        with mock.patch.object(pipeline, "build_records", wraps=pipeline.build_records):
+            clf_failures = 5
+            with mock.patch.object(c.Classifier, "classify", autospec=True,
+                                   side_effect=lambda self, *a: setattr(self, "d3_failures", clf_failures) or c.rules_classify(*a[:3])):
+                code, scraped, posted = self.run_main(d3=d3)
+        self.assertEqual((code, scraped, posted), (1, True, []))
+
+    def test_postings_d3_could_not_answer_go_to_review(self):
+        clf = c.Classifier("rules", cache_path=None)
+        clf.d3 = FakeD3({"computational": {"yes": 0.9, "no": 0.1}, "category": {"discovery": 0.9, "tech": 0.1}})
+        real = clf.d3.classify
+        clf.d3.classify = lambda t, *a: (_ for _ in ()).throw(RuntimeError("timeout")) if "Process" in t else real(t, *a)
+        recs, report = pipeline.build_records(self.postings(), clf, require_d3=True)
+        by = {r["title"]: r for r in recs}
+        held = by["Intern - PDM - Process Chemistry"]   # rules alone would have said skip (fit: no -> bin)
+        self.assertEqual(held.get("review_reason"), pipeline.D3_HELD)
+        self.assertNotIn("fit", held)
+        self.assertNotIn("review_reason", by["Intern - Development - Pharmacometrics"])   # d3 answered: published as usual
+        self.assertEqual([r["decision"] for r in report], ["publish", "publish", "review"])
+
+
+
 if __name__ == "__main__":
     unittest.main()

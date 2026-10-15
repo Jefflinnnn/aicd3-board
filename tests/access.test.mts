@@ -612,8 +612,28 @@ describe("job data refresh", () => {
     process.env.VERCEL = "1"
     try {
       assert.match(RS.runnerProblem() ?? "", /Vercel/)
+      // on the live site, Refresh now leaves a request for the GPU PC (scraper/refresh_requests.ps1) instead
+      as(alice)
+      await rejects(R.refreshNow())
       as(admin)
-      await assert.rejects(R.refreshNow(), /Vercel/)
+      await prisma.scrapeRun.updateMany({ where: { status: "running" }, data: { status: "succeeded" } })
+      assert.deepEqual(await R.refreshNow(), { started: false, queued: true })
+      const first = (await prisma.siteMeta.findUnique({ where: { id: 1 } }))?.refreshRequestedAt
+      assert.ok(first)
+      assert.deepEqual(await R.refreshNow(), { started: false, queued: true })   // a second click keeps the first request
+      assert.equal((await prisma.siteMeta.findUnique({ where: { id: 1 } }))?.refreshRequestedAt?.getTime(), first.getTime())
+      const st = await R.getRefreshStatus()
+      assert.equal(st.queue, true)
+      assert.equal(st.problem, null)   // not a problem here: the button works
+      assert.equal(st.requested?.at, first.getTime())
+      assert.equal(st.requested?.by, admin.name ?? admin.email)
+      assert.equal((await R.stopRefresh()).stopped, true)   // Cancel request
+      assert.equal((await R.getRefreshStatus()).requested, null)
+      // while a refresh is running, no request is left: the running one brings the board up to date
+      const run = await prisma.scrapeRun.create({ data: { trigger: "schedule", status: "running", summary: { host: "GPU-PC" } } })
+      assert.deepEqual(await R.refreshNow(), { started: false })
+      assert.equal((await prisma.siteMeta.findUnique({ where: { id: 1 } }))?.refreshRequestedAt, null)
+      await prisma.scrapeRun.delete({ where: { id: run.id } })
     } finally {
       delete process.env.VERCEL
     }

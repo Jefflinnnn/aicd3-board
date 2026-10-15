@@ -1,7 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useRef, useState } from "react"
-import { AlertTriangle, Cpu, RefreshCw, Square } from "lucide-react"
+import { AlertTriangle, Clock, Cpu, RefreshCw, Square, X } from "lucide-react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
@@ -21,6 +21,8 @@ const STATUS: Record<RefreshRun["status"], { label: string; cls: string }> = {
   failed: { label: "Failed", cls: "bg-destructive/10 text-destructive" },
   cancelled: { label: "Stopped", cls: "bg-muted text-muted-foreground" },
 }
+/** no automatic refresh for over a day (the GPU PC refreshes twice a day, at 9 AM and 9 PM) */
+const stale = (last: { at: number } | null, now: number) => !!now && (!last || now - last.at > 864e5)
 const when = (t: number) => new Date(t).toLocaleString("en-US", { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
 function took(r: RefreshRun) {
   const ms = (r.finishedAt ?? Date.now()) - r.startedAt
@@ -118,19 +120,54 @@ export function Refresh() {
           <Button variant="outline" disabled={busy} onClick={() => act(stopRefresh, "Stopping the refresh…")}>
             <Square className="size-3.5" /> Stop
           </Button>
+        ) : st?.requested ? (
+          <Button variant="outline" disabled={busy} onClick={() => act(stopRefresh, "Request withdrawn")}>
+            <X className="size-3.5" /> Cancel request
+          </Button>
         ) : (
-          <Button disabled={busy || !st || !!st.problem} onClick={() => act(async () => { const r = await refreshNow(); if (!r.started) toast("A refresh is already running.") }, "Refresh started. You can leave this page; it keeps going.")}>
+          <Button
+            disabled={busy || !st || !!st.problem}
+            onClick={() => act(async () => {
+              const r = await refreshNow()
+              if (r.queued) toast("Refresh requested", { description: "The GPU PC starts it within 5 minutes, with d3. You can leave this page." })
+              else if (r.started) toast("Refresh started. You can leave this page; it keeps going.")
+              else toast("A refresh is already running.")
+            })}
+          >
             <RefreshCw className="size-4" /> Refresh now
           </Button>
         )
       }
     >
+      {st?.requested && !running && (
+        <p className={cn("mb-3 flex items-start gap-2 rounded-md px-3 py-2 text-sm", now && now - st.requested.at > 15 * 6e4 ? "bg-warn-soft text-warn" : "bg-muted text-muted-foreground")}>
+          <Clock className="mt-0.5 size-4 shrink-0" />
+          <span>
+            Refresh requested {when(st.requested.at)}{st.requested.by ? ` by ${st.requested.by}` : ""}. The GPU PC checks every 5 minutes and
+            starts it then; scheduled refreshes aren&apos;t affected.
+            {now && now - st.requested.at > 15 * 6e4 ? " It hasn't been picked up yet: check that the GPU PC is on and signed in, and that its request check is set up (scraper\\register_daily_refresh.ps1 -Status)." : ""}
+          </span>
+        </p>
+      )}
       {st?.problem && (
         <p className="mb-3 flex items-start gap-2 rounded-md bg-warn-soft px-3 py-2 text-sm text-warn">
           <AlertTriangle className="mt-0.5 size-4 shrink-0" /> {st.problem}
         </p>
       )}
 
+      {st && !st.schedulerHere ? (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b pb-3 text-sm">
+          <span>
+            Automatic refresh runs from the GPU PC&apos;s scheduled task (scraper\register_daily_refresh.ps1), not from this server.
+          </span>
+          <span className={cn("basis-full text-xs", stale(st.lastScheduled, now) ? "text-warn" : "text-muted-foreground")}>
+            {!st.lastScheduled
+              ? "No automatic refresh has reached this site yet. Set up the scheduled task on the GPU PC (see the README)."
+              : `Last automatic refresh ${when(st.lastScheduled.at)}${st.lastScheduled.host ? ` on ${st.lastScheduled.host}` : ""}: ${st.lastScheduled.status}.` +
+                (stale(st.lastScheduled, now) ? " That's more than a day ago: check that the PC is on and signed in (scraper\\register_daily_refresh.ps1 -Status)." : "")}
+          </span>
+        </div>
+      ) : (
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b pb-3">
         <Switch id="auto-refresh" checked={!!st?.autoRefresh} disabled={busy || !st} onCheckedChange={(on) => act(() => setAutoRefresh(on, 24), on ? "Will refresh every day" : "Automatic refresh off")} />
         <Label htmlFor="auto-refresh" className="cursor-pointer">Refresh automatically {every}</Label>
@@ -139,6 +176,7 @@ export function Refresh() {
           {st?.autoRefresh && " (while this server is running)"}
         </span>
       </div>
+      )}
 
       {st && (
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-b py-3 text-sm">

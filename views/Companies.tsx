@@ -164,7 +164,7 @@ export default function Companies() {
         title="Companies we track"
         sub={
           <>
-            We check these career sites daily for internship and co-op postings.
+            We check these career sites twice a day for internship and co-op postings.
             <span className="mt-2 flex flex-wrap gap-x-6 gap-y-1">
               <span><b className="font-display text-lg font-semibold tabular-nums text-foreground">{COMPANIES.length}</b> companies</span>
               <span><b className="font-display text-lg font-semibold tabular-nums text-foreground">{liveTotal}</b> live roles</span>

@@ -66,8 +66,15 @@ def where(p: pi.Posting) -> str:
     return " | ".join(x for x in [*(p.locations or []), p.location] if x)[:400]
 
 
-def build_records(postings: list[pi.Posting], clf: Classifier, on_progress=None) -> tuple[list[dict], list[dict]]:
-    """Import records for the app, and one report row per posting."""
+D3_HELD = ("d3 couldn't classify this posting, so keyword rules were used; check it before it's published "
+           "(the scheduled refresh only lets d3 decide)")
+
+
+def build_records(postings: list[pi.Posting], clf: Classifier, on_progress=None,
+                  require_d3: bool = False) -> tuple[list[dict], list[dict]]:
+    """Import records for the app, and one report row per posting. With require_d3, a posting d3 couldn't answer
+    for (it fell back to keyword rules) is neither published nor taken off the board on the rules' say-so: it goes to
+    the review queue instead."""
     records, report = [], []
     # the model classifies the new or changed ones first (Claude several at a time); the loop below reads its cache
     clf.warm([(p.title, p.company, p.description, where(p)) for p in postings if not pi.undergrad_only(p.title, p.description)],
@@ -83,7 +90,10 @@ def build_records(postings: list[pi.Posting], clf: Classifier, on_progress=None)
             continue
         v = clf.classify(p.title, p.company, p.description, where(p))
         decision = v.decision
-        if decision == "skip" and v.skip_reason == "undergraduate only":
+        held = require_d3 and v.backend != "d3"
+        if held:
+            decision = "review"
+        elif decision == "skip" and v.skip_reason == "undergraduate only":
             decision = "undergrad"
         elif decision == "skip" and v.skip_reason == "not in the US":
             decision = "not_us"
@@ -100,6 +110,10 @@ def build_records(postings: list[pi.Posting], clf: Classifier, on_progress=None)
             rec["responsibilities"] = v.resp
         if v.quals:
             rec["qualifications"] = v.quals
+        if held:
+            rec["review_reason"] = D3_HELD
+            records.append(rec)
+            continue
         if v.decision == "skip":
             # sent along marked as not a fit: never added, and if it's already on the board the app moves it to
             # the bin (staff can restore it) instead of marking it "taken down" for not appearing in this run
@@ -270,6 +284,9 @@ def _main(argv: list[str] | None = None) -> int:
     ap.add_argument("--workers", type=int, default=5)
     ap.add_argument("--out", default=os.path.join(ROOT, "scraper", "out", "pipeline"))
     ap.add_argument("--summary-json", metavar="PATH", help="also write the run's counts as JSON (the app's Refresh button reads it)")
+    ap.add_argument("--require-d3", action="store_true",
+                    help="only let d3 decide: stop before scraping if its server isn't answering, import nothing if it "
+                         "stops answering partway, and send postings it couldn't classify to the review queue")
     ap.add_argument("--trigger", choices=["manual", "schedule"], default="manual",
                     help="how the Admin page labels this run (the daily scheduled task passes schedule)")
     args = ap.parse_args(argv)
@@ -296,6 +313,14 @@ def _main(argv: list[str] | None = None) -> int:
         return 3
     _run["progress"] = prog
 
+    if args.require_d3:
+        # find out now, not after 10-30 minutes of scraping
+        from classify import D3
+        try:
+            D3()
+        except Exception as e:
+            raise SystemExit(f"d3 isn't answering, and this run only lets d3 decide, so nothing was changed: {str(e)[:300]}")
+
     step("1/4 scrape", f"{len(names)} companies: {', '.join(names)}")
     client = pi.PoliteClient()
     postings, status = pi.run(names, details=True, us_only=True, client=client, workers=max(1, min(args.workers, 6)),
@@ -303,14 +328,23 @@ def _main(argv: list[str] | None = None) -> int:
     _stop_if_asked(prog)
     step("2/4 classify", f"{len(postings)} postings")
     prog.step("classify")
-    clf = Classifier(args.classifier)
+    clf = Classifier("d3" if args.require_d3 else args.classifier)
     prog.classifier(clf.name)
     print(f"classifier: {clf.name}", flush=True)
     if clf.fallback_reason:
         print(f"[warning] {clf.fallback_reason}", flush=True)
-    records, report = build_records(postings, clf, on_progress=prog.classify)
+    if args.require_d3 and clf.name != "d3":
+        raise SystemExit(f"d3 isn't answering, and this run only lets d3 decide, so nothing was imported: {clf.fallback_reason}")
+    records, report = build_records(postings, clf, on_progress=prog.classify, require_d3=args.require_d3)
     prog.classify(len(postings), len(postings))
     clf.save()
+    if args.require_d3 and clf.d3_failures >= 5:
+        why = f" ({clf.fallback_reason})" if clf.fallback_reason else ""
+        raise SystemExit(f"d3 stopped answering partway{why}, and this run only lets d3 decide, "
+                         "so nothing was imported. The answers d3 did give are saved, so the next run is quicker.")
+    held = sum(1 for r in records if r.get("review_reason") == D3_HELD)
+    if held:
+        print(f"[warning] d3 couldn't classify {held} posting(s); they go to the review queue", flush=True)
     _stop_if_asked(prog)
 
     os.makedirs(args.out, exist_ok=True)
