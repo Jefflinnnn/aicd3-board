@@ -66,9 +66,11 @@ try {
   $n = (ConvertFrom-Json $r.Content).postings.Count
   Write-Host "The live site accepted this PC's token ($n open postings on the board)."
 } catch {
-  $status = $_.Exception.Response.StatusCode.value__
-  if ($status -eq 401) { Write-Host "The live site refused the token: SCRAPER_INGEST_TOKEN in .env.local isn't the same as Vercel's Production value. Copy Vercel's value into .env.local, then run this again." }
-  elseif ($status -eq 503) { Write-Host "The live site has no SCRAPER_INGEST_TOKEN set (Vercel -> Settings -> Environment Variables -> Production). Add it there, redeploy, then run this again." }
+  # named $httpStatus because PowerShell names are case-insensitive and $Status is the -Status switch
+  $httpStatus = $_.Exception.Response.StatusCode.value__
+  if ($httpStatus -eq 404) { Write-Host "$Url answered 404 Not Found for /api/ingest/open: that isn't the real job board. Use the address students sign in at (Vercel -> the real project, not the demo -> Settings -> Domains). The public demo has no import endpoint." }
+  elseif ($httpStatus -eq 401) { Write-Host "The live site refused the token: SCRAPER_INGEST_TOKEN in .env.local isn't the same as Vercel's Production value. Copy Vercel's value into .env.local, then run this again." }
+  elseif ($httpStatus -eq 503) { Write-Host "The live site has no SCRAPER_INGEST_TOKEN set (Vercel -> Settings -> Environment Variables -> Production). Add it there, redeploy, then run this again." }
   else { Write-Host "Couldn't reach $Url/api/ingest/open ($($_.Exception.Message)). Check the address." }
   exit 1
 }
