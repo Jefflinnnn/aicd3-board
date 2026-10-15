@@ -92,7 +92,8 @@ function layout(cos: Co[]) {
   return { groups: placed, rowY, H, hubY }
 }
 
-export function RefreshRoutes({ run }: { run: RefreshRun }) {
+/** stages: list the run's four stages on its card (off where the Admin page shows them as step cards above) */
+export function RefreshRoutes({ run, stages: showStages = true }: { run: RefreshRun; stages?: boolean }) {
   const [list, setList] = useState(false)
   const p = progressFor(run)
   const live = run.status === "running"
@@ -147,7 +148,7 @@ export function RefreshRoutes({ run }: { run: RefreshRun }) {
     { id: "classify", label: `Classify with ${clf}`, note: p.classify.total ? `${p.classify.done} of ${p.classify.total} new postings` : at > 1 ? "nothing new to classify" : "" },
     { id: "import", label: p.dryRun ? "Compare with the job board" : "Update the job board", note: o ? `${o.publish} published · ${o.review} to review` : "" },
     { id: "check", label: "Re-check open postings", note: p.checked ? `${p.checked.closed} taken down (filled or removed)` : "" },
-  ].map((s, i) => ({ ...s, state: (at > i || (!live && run.status === "succeeded") ? "done" : at === i && live ? "now" : "next") as "done" | "now" | "next" }))
+  ].filter((s) => showStages || s.id === "scrape").map((s, i) => ({ ...s, state: (at > i || (!live && run.status === "succeeded") ? "done" : at === i && live ? "now" : "next") as "done" | "now" | "next" }))
   const SH = 40   // a stage: its label, and its count under it
   const CARD_H = 44 + stages.length * SH + 8
   const cardY = geo.hubY - CARD_H / 2
@@ -186,7 +187,7 @@ export function RefreshRoutes({ run }: { run: RefreshRun }) {
         <g>
           <rect x={CARD_X} y={cardY} width={CARD_W} height={CARD_H} rx={12} fill="hsl(var(--card))" stroke={live ? LIT : LINE} strokeOpacity={live ? 0.6 : 1} />
           <text x={CARD_X + 14} y={cardY + 24} fontSize="13" fontWeight={600} fill={INK}>
-            {run.trigger === "schedule" ? "Daily refresh" : "Refresh"}{p.dryRun && <tspan fontWeight={400} fill={MUTED}> · dry run</tspan>}
+            {run.trigger === "schedule" ? "Scheduled refresh" : "Refresh"}{p.dryRun && <tspan fontWeight={400} fill={MUTED}> · dry run</tspan>}
           </text>
           {stages.map((s, i) => {
             const y = cardY + 40 + i * SH

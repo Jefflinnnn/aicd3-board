@@ -372,5 +372,45 @@ class RequireD3(unittest.TestCase):
 
 
 
+class LiveRouting(unittest.TestCase):
+    """While d3 answers, the Admin page sees where postings have gone so far (progress.routing)."""
+
+    def test_counts_cached_answers_first_then_each_new_one(self):
+        clf = c.Classifier("rules", cache_path=None)
+        clf.d3 = FakeD3({"computational": {"yes": 0.9, "no": 0.1}, "category": {"discovery": 0.9, "tech": 0.1}})
+        ps = Pipeline.postings(None)
+        clf.classify(ps[0].title, ps[0].company, ps[0].description, pipeline.where(ps[0]))   # answered on an earlier run
+        undergrad = pi.Posting(company="Gilead Sciences", title="Undergraduate Co-op - Data Science", url="https://x/u",
+                               description="Open to undergraduates only.")
+        seen = []
+        pipeline.build_records(ps + [undergrad], clf, on_routing=lambda t, pending, last: seen.append((t, pending, last)))
+        first, final = seen[0], seen[-1]
+        self.assertEqual((first[0]["publish"], first[0]["undergrad"], first[1], first[2]), (1, 1, 2, None))
+        self.assertEqual(final[1], 0)
+        self.assertEqual(final[0]["publish"], 3)
+        self.assertEqual(final[2]["to"], "publish")
+        self.assertEqual(len(seen), 3)   # the first report, then one per new answer
+
+    def test_route_of(self):
+        self.assertEqual(pipeline.route_of(c.Verdict(0.9, "tech", 1, "d3")), "publish")
+        self.assertEqual(pipeline.route_of(c.Verdict(0.9, "discovery", 1, "d3", undergrad=0.8)), "undergrad")
+        self.assertEqual(pipeline.route_of(c.Verdict(0.9, "discovery", 1, "d3", us=0.1)), "not_us")
+        self.assertEqual(pipeline.route_of(c.Verdict(0.1, "other", 1, "d3")), "skip")
+        self.assertEqual(pipeline.route_of(c.Verdict(0.1, "other", 1, "rules"), require_d3=True), "review")
+
+
+
+class AdminDialogInStep(unittest.TestCase):
+    def test_thresholds_match_lib_d3_routing(self):
+        # the Admin page's "How d3 routes" dialog shows these numbers (lib/d3-routing.ts)
+        import re
+        ts = open(os.path.join(os.path.dirname(__file__), "..", "lib", "d3-routing.ts"), encoding="utf-8").read()
+        for name in ("FIT_MIN", "REVIEW_MIN", "UNDERGRAD_SKIP", "UNDERGRAD_REVIEW", "US_SKIP", "US_REVIEW", "QUESTIONS_V"):
+            m = re.search(rf"\b{name}: ([0-9.]+)", ts)
+            self.assertIsNotNone(m, name)
+            self.assertEqual(float(m.group(1)), float(getattr(c, name)), f"{name} differs between classify.py and lib/d3-routing.ts")
+
+
+
 if __name__ == "__main__":
     unittest.main()

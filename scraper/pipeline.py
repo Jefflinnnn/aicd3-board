@@ -30,6 +30,7 @@ import json
 import logging
 import os
 import sys
+import threading
 import time
 import traceback
 from datetime import datetime
@@ -70,15 +71,49 @@ D3_HELD = ("d3 couldn't classify this posting, so keyword rules were used; check
            "(the scheduled refresh only lets d3 decide)")
 
 
+def route_of(v, require_d3: bool = False) -> str:
+    """Where a verdict sends a posting, in the Admin page's terms: publish, review, skip, undergrad or not_us."""
+    if require_d3 and v.backend != "d3":
+        return "review"
+    if v.decision == "skip":
+        return {"undergraduate only": "undergrad", "not in the US": "not_us"}.get(v.skip_reason, "skip")
+    return v.decision
+
+
 def build_records(postings: list[pi.Posting], clf: Classifier, on_progress=None,
-                  require_d3: bool = False) -> tuple[list[dict], list[dict]]:
+                  require_d3: bool = False, on_routing=None) -> tuple[list[dict], list[dict]]:
     """Import records for the app, and one report row per posting. With require_d3, a posting d3 couldn't answer
     for (it fell back to keyword rules) is neither published nor taken off the board on the rules' say-so: it goes to
     the review queue instead."""
     records, report = [], []
+    items = [(p.title, p.company, p.description, where(p)) for p in postings if not pi.undergrad_only(p.title, p.description)]
+    # live routing for the Admin page: postings answered on an earlier run are counted straight away, the rest as
+    # the model answers them
+    tally = {"publish": 0, "review": 0, "skip": 0, "undergrad": len(postings) - len(items), "not_us": 0}
+    waiting: dict[tuple, int] = {}
+    for it in items:
+        v = clf.peek(*it)
+        if v:
+            tally[route_of(v, require_d3)] += 1
+        else:
+            waiting[it] = waiting.get(it, 0) + 1
+    lock = threading.Lock()
+    pending = [sum(waiting.values())]
+    if on_routing:
+        on_routing(dict(tally), pending[0], None)
+
+    def answered(it, v):
+        n = waiting.pop(it, 0)
+        if not n or not on_routing:
+            return
+        to = route_of(v, require_d3)
+        with lock:
+            tally[to] += n
+            pending[0] -= n
+            on_routing(dict(tally), pending[0], {"title": it[0][:200], "company": it[1][:80], "to": to})
+
     # the model classifies the new or changed ones first (Claude several at a time); the loop below reads its cache
-    clf.warm([(p.title, p.company, p.description, where(p)) for p in postings if not pi.undergrad_only(p.title, p.description)],
-             on_progress=on_progress)
+    clf.warm(items, on_progress=on_progress, on_verdict=answered)
     for p in postings:
         if pi.undergrad_only(p.title, p.description):
             # UCSF students are graduate and professional students: undergraduate-only roles and co-ops are
@@ -335,7 +370,7 @@ def _main(argv: list[str] | None = None) -> int:
         print(f"[warning] {clf.fallback_reason}", flush=True)
     if args.require_d3 and clf.name != "d3":
         raise SystemExit(f"d3 isn't answering, and this run only lets d3 decide, so nothing was imported: {clf.fallback_reason}")
-    records, report = build_records(postings, clf, on_progress=prog.classify, require_d3=args.require_d3)
+    records, report = build_records(postings, clf, on_progress=prog.classify, require_d3=args.require_d3, on_routing=prog.routing)
     prog.classify(len(postings), len(postings))
     clf.save()
     if args.require_d3 and clf.d3_failures >= 5:
