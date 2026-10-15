@@ -26,7 +26,8 @@ $url = (Read-EnvLocal "AICD3_URL").TrimEnd("/")
 $token = Read-EnvLocal "AICD3_INGEST_TOKEN"
 if (-not $token) { $token = Read-EnvLocal "SCRAPER_INGEST_TOKEN" }
 if (-not $url -or -not $token) { exit 1 }   # not set up; register_daily_refresh.ps1 explains
-$headers = @{ Authorization = "Bearer $token" }
+# the computer's name goes along, so the Admin page can show that this PC is checking and when it last did
+$headers = @{ Authorization = "Bearer $token"; "X-AICD3-Host" = $env:COMPUTERNAME }
 
 try {
   $state = Invoke-RestMethod -Uri "$url/api/ingest/request" -Headers $headers -TimeoutSec 30

@@ -198,6 +198,9 @@ model SiteMeta {
   refreshRequestedAt DateTime?
   /// the staff member's profile id
   refreshRequestedBy String?
+  /// when the GPU PC last asked for requests (every 5 minutes while its task runs), and its computer name
+  requestCheckAt   DateTime?
+  requestCheckHost String?
 }
 
 enum ScrapeStatus {

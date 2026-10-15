@@ -56,6 +56,7 @@ const openRoute = await import("../app/api/ingest/open/route")
 const closeRoute = await import("../app/api/ingest/close/route")
 const flagRoute = await import("../app/api/ingest/flag/route")
 const progressRoute = await import("../app/api/ingest/progress/route")
+const requestRoute = await import("../app/api/ingest/request/route")
 const prisma = db()
 
 const job = (id: string, extra: Record<string, unknown> = {}) => ({
@@ -627,6 +628,16 @@ describe("job data refresh", () => {
       assert.equal(st.problem, null)   // not a problem here: the button works
       assert.equal(st.requested?.at, first.getTime())
       assert.equal(st.requested?.by, admin.name ?? admin.email)
+      // the GPU PC's check (scraper/refresh_requests.ps1) is recorded, so the panel can say it's listening
+      assert.equal((await R.getRefreshStatus()).requestCheck, null)
+      const asked = await requestRoute.GET(new Request("http://localhost/api/ingest/request", {
+        headers: { authorization: "Bearer " + process.env.SCRAPER_INGEST_TOKEN, "x-aicd3-host": "AICD3-PC6<script>" },
+      }))
+      assert.deepEqual(await asked.json(), { requested: true, at: first.toISOString(), running: false })
+      const check = (await R.getRefreshStatus()).requestCheck
+      assert.equal(check?.host, "AICD3-PC6script")
+      assert.ok(check && Date.now() - check.at < 60_000)
+      assert.equal((await requestRoute.GET(new Request("http://localhost/api/ingest/request"))).status, 401)
       assert.equal((await R.stopRefresh()).stopped, true)   // Cancel request
       assert.equal((await R.getRefreshStatus()).requested, null)
       // while a refresh is running, no request is left: the running one brings the board up to date

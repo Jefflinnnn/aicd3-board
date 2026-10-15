@@ -548,9 +548,15 @@ class Classifier:
         text = posting_text(title, company, description, location if self.d3 else "")
         return hashlib.sha256(f"{self.name}\n{model}\n{QUESTIONS_V}\n{text}".encode()).hexdigest()[:24]
 
-    def warm(self, items: list[tuple], on_progress=None) -> None:
+    def peek(self, title: str, company: str, description: str, location: str = "") -> Verdict | None:
+        """The cached answer for a posting, without asking the model (None if it hasn't been asked yet)."""
+        hit = self.cache.get(self._key(title, company, description, location))
+        return settle_category(Verdict(**hit), title) if hit else None
+
+    def warm(self, items: list[tuple], on_progress=None, on_verdict=None) -> None:
         """Classify the uncached (title, company, description[, location]) items ahead of time, with progress
-        in the log: several at once for Claude, two at a time for d3 (its server answers one by one on the GPU)."""
+        in the log: several at once for Claude, two at a time for d3 (its server answers one by one on the GPU).
+        on_verdict(item, verdict) is called as each answer arrives (the Admin page's live routing picture)."""
         if not (self.llm or self.d3):
             return
         todo = [it for it in dict.fromkeys(items) if self._key(*it) not in self.cache]
@@ -564,7 +570,9 @@ class Classifier:
 
         def one(it):
             nonlocal done
-            self.classify(*it)
+            v = self.classify(*it)
+            if on_verdict:
+                on_verdict(it, v)
             with self._lock:
                 done += 1
                 n = done

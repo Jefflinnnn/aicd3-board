@@ -10,7 +10,7 @@ export const dynamic = "force-dynamic"
  * "Refresh now" on the live site's Admin page, for the GPU PC. Vercel can't run the scraper, so the button leaves a
  * request in the database; scraper/refresh_requests.ps1 on the GPU PC asks here every few minutes.
  *
- *   GET  /api/ingest/request                      -> { requested, at, running }
+ *   GET  /api/ingest/request                      -> { requested, at, running }   (X-AICD3-Host: the PC's name)
  *   POST /api/ingest/request  {"action":"claim"}   -> { claimed }   take the request (only one caller gets it)
  *   POST /api/ingest/request  {"action":"requeue"} -> { requeued }  put it back (the run couldn't start)
  *   Authorization: Bearer $SCRAPER_INGEST_TOKEN
@@ -20,6 +20,10 @@ export const dynamic = "force-dynamic"
 export async function GET(req: Request) {
   const refused = refuseIngest(req)
   if (refused) return refused
+  // remember who's listening, so the Admin page can say whether the GPU PC is checking at all
+  const host = (req.headers.get("x-aicd3-host") || "").replace(/[^\w .-]/g, "").slice(0, 100) || null
+  const check = { requestCheckAt: new Date(), requestCheckHost: host }
+  await db().siteMeta.upsert({ where: { id: 1 }, create: { id: 1, ...check }, update: check })
   const [meta, running] = await Promise.all([
     db().siteMeta.findUnique({ where: { id: 1 }, select: { refreshRequestedAt: true } }),
     db().scrapeRun.findFirst({ where: { status: "running" }, select: { id: true } }),

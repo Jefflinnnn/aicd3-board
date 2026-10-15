@@ -36,7 +36,7 @@ export async function getRefreshStatus(): Promise<RefreshStatus> {
     return await readStatus()
   } catch (e) {
     const problem = schemaProblem(e)
-    if (problem) return { problem, autoRefresh: false, everyHours: 24, nextAt: null, runs: [], classifier: { ...classifierInfo(), server: await d3Server() }, schedulerHere: schedulerHere(), lastScheduled: null, queue: queueHere(), requested: null }
+    if (problem) return { problem, autoRefresh: false, everyHours: 24, nextAt: null, runs: [], classifier: { ...classifierInfo(), server: await d3Server() }, schedulerHere: schedulerHere(), lastScheduled: null, queue: queueHere(), requested: null, requestCheck: null }
     throw e
   }
 }
@@ -67,6 +67,7 @@ async function readStatus(): Promise<RefreshStatus> {
     requested: meta?.refreshRequestedAt
       ? { at: meta.refreshRequestedAt.getTime(), by: meta.refreshRequestedBy ? names[meta.refreshRequestedBy] || "Staff" : null }
       : null,
+    requestCheck: meta?.requestCheckAt ? { at: meta.requestCheckAt.getTime(), host: meta.requestCheckHost } : null,
   }
 }
 

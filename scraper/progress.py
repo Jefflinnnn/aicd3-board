@@ -57,6 +57,9 @@ class Progress:
             "companies": [{"name": n, "state": "waiting", "found": None, "note": ""} for n in companies],
             "classify": {"done": 0, "total": 0},
             "outcome": None,      # {"publish", "review", "skip", "undergrad", "not_us"} once classified
+            # live while classifying: where postings have gone so far, how many d3 hasn't answered yet, and the
+            # last one it answered {"title", "company", "to"}
+            "routing": None,
             "checked": None,      # {"open", "closed", "unknown"} once open postings are re-checked
         }
 
@@ -143,6 +146,12 @@ class Progress:
     def classify(self, done: int, total: int) -> None:
         with self._lock:
             self.state["classify"] = {"done": done, "total": total}
+        self._changed()
+
+    def routing(self, counts: dict, pending: int, last: dict | None = None) -> None:
+        with self._lock:
+            self.state["routing"] = {**{k: int(counts.get(k, 0)) for k in ("publish", "review", "skip", "undergrad", "not_us")},
+                                     "pending": max(0, int(pending)), "last": last}
         self._changed()
 
     def outcome(self, counts: dict) -> None:

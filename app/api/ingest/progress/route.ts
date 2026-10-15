@@ -25,6 +25,10 @@ const progressSchema = z.object({
   })).max(100),
   classify: z.object({ done: count, total: count }),
   outcome: z.object({ publish: count, review: count, skip: count, undergrad: count, not_us: count }).nullable(),
+  routing: z.object({
+    publish: count, review: count, skip: count, undergrad: count, not_us: count, pending: count,
+    last: z.object({ title: z.string().max(200), company: z.string().max(80), to: z.enum(["publish", "review", "skip", "undergrad", "not_us"]) }).nullable(),
+  }).nullable().optional(),
   checked: z.object({ open: count, closed: count, unknown: count }).nullable(),
 })
 

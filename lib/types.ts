@@ -68,7 +68,15 @@ export interface RunProgress {
   companies: { name: string; state: "waiting" | "running" | "done" | "failed"; found: number | null; note: string }[]
   classify: { done: number; total: number }
   outcome: { publish: number; review: number; skip: number; undergrad: number; not_us: number } | null
+  /** live while classifying: where postings have gone so far, how many the model hasn't answered, the last one it did */
+  routing?: RoutingTally | null
   checked: { open: number; closed: number; unknown: number } | null
+}
+export type RouteTo = "publish" | "review" | "skip" | "undergrad" | "not_us"
+export interface RoutingTally {
+  publish: number; review: number; skip: number; undergrad: number; not_us: number
+  pending: number
+  last: { title: string; company: string; to: RouteTo } | null
 }
 
 /** One run of the scraper pipeline (Admin: Job data refresh). */
@@ -126,4 +134,6 @@ export interface RefreshStatus {
   queue: boolean
   /** a "Refresh now" waiting for the GPU PC to pick it up */
   requested: { at: number; by: string | null } | null
+  /** when the GPU PC last checked for requests (scraper/refresh_requests.ps1, every 5 minutes), and its name */
+  requestCheck: { at: number; host: string | null } | null
 }
