@@ -7,8 +7,8 @@ import { normalizeUrl } from "./validate"
 import { normalizeLocation } from "./locations"
 
 export const CSV_TEMPLATE =
-  "title,company,locations,category,deadline,first_seen,term,mode,pay,url,req_id,description,responsibilities,qualifications\n" +
-  '"Machine Learning Intern",Genentech,"South San Francisco, CA; Remote (US)",Tech,2026-11-15,2026-10-01,Summer 2027,Hybrid,$48–$56/hr,https://careers.gene.com/job/123,R-123456,"Build models…","Train models | Write pipelines","Python | ML coursework"'
+  "title,company,locations,category,deadline,first_seen,term,mode,pay,url,req_id,description,responsibilities,qualifications,start_from,start_to\n" +
+  '"Machine Learning Intern",Genentech,"South San Francisco, CA; Remote (US)",Tech,2026-11-15,2026-10-01,Summer 2027,Hybrid,$48–$56/hr,https://careers.gene.com/job/123,R-123456,"Build models…","Train models | Write pipelines","Python | ML coursework",May,July'
 
 export interface ImportRowError { row: number; reason: string }
 export interface ImportPlan {
@@ -100,8 +100,17 @@ function day(v: unknown): string | null {
 }
 
 const sameish = (a: Job, b: Job) =>
-  JSON.stringify([a.title, a.company, jobLocations(a), a.category, a.deadline, a.term, a.mode, a.pay, a.url, a.reqId || "", a.summary, a.resp, a.quals, !!a.closed]) ===
-  JSON.stringify([b.title, b.company, jobLocations(b), b.category, b.deadline, b.term, b.mode, b.pay, b.url, b.reqId || "", b.summary, b.resp, b.quals, !!b.closed])
+  JSON.stringify([a.title, a.company, jobLocations(a), a.category, a.deadline, a.term, a.mode, a.pay, a.url, a.reqId || "", a.summary, a.resp, a.quals, !!a.closed, a.startFrom ?? 0, a.startTo ?? 0]) ===
+  JSON.stringify([b.title, b.company, jobLocations(b), b.category, b.deadline, b.term, b.mode, b.pay, b.url, b.reqId || "", b.summary, b.resp, b.quals, !!b.closed, b.startFrom ?? 0, b.startTo ?? 0])
+
+const MONTHS3 = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
+/** a month 1-12 from 5, "5", "May" or "may"; undefined when blank or unreadable */
+function month(v: unknown): number | undefined {
+  const s = str(v)
+  if (!s) return undefined
+  const n = /^\d{1,2}$/.test(s) ? Number(s) : MONTHS3.indexOf(s.slice(0, 3).toLowerCase()) + 1
+  return n >= 1 && n <= 12 ? n : undefined
+}
 
 /** A link without tracking parameters, fragment or trailing slash, so the same page always compares equal. */
 function canonUrl(u: string): string {
@@ -175,6 +184,8 @@ export function planImport(text: string, existing: Job[], closeMissing: boolean,
     if (!url) return errors.push({ row, reason: `Link "${urlRaw}" isn't a valid web address.` })
     const closedRaw = str(pick(r, "closed", "taken down")).toLowerCase()
     const reqId = str(pick(r, "req_id", "reqid", "job id", "jobid", "requisition", "requisition id")).slice(0, 64)
+    const startFrom = month(pick(r, "start_from", "start_earliest", "earliest start"))
+    const startTo = startFrom && (month(pick(r, "start_to", "start_latest", "latest start")) || startFrom)
     incoming.push({
       id: "",
       title,
@@ -194,6 +205,9 @@ export function planImport(text: string, existing: Job[], closeMissing: boolean,
       quals: list(pick(r, "qualifications", "requirements"), /\||\n/),
       closed: ["true", "yes", "1"].includes(closedRaw) || undefined,
       addedAt: now,
+      // always set, so a posting that stops naming a start month loses the old one on update
+      startFrom: startFrom || undefined,
+      startTo: startTo || undefined,
     })
     if (!catHit) catMiss.add(incoming.length - 1)
     const why = list(pick(r, "review_reason", "review", "flags"), /\|/).map((x) => x.slice(0, 300)).slice(0, 5)
@@ -253,7 +267,7 @@ export function planImport(text: string, existing: Job[], closeMissing: boolean,
   })
   const companies = [...new Set(incoming.map((j) => j.company))]
   const close = closeMissing
-    ? existing.filter((j) => companies.includes(j.company) && !j.closed && !matched.has(j.id) && (j.deadline ? j.deadline >= iso(TODAY) : true)).map((j) => ({ ...j, closed: true }))
+    ? existing.filter((j) => companies.includes(j.company) && !j.closed && !matched.has(j.id) && (j.deadline ? j.deadline > iso(TODAY) : true)).map((j) => ({ ...j, closed: true }))
     : []
   const dropStale = closeMissing
     ? staged.filter((s) => s.review.source === "import" && s.review.status === "pending" && companies.includes(s.company) && !heldSeen.has(s.id))

@@ -24,6 +24,8 @@ export interface Settings {
   soonDays: number
   sort: string // a SORT_PRESETS id
   home: string // "" = no preference
+  /** the job board starts on (and Reset returns to) DEFAULT_FILTERS; off: every role */
+  defaultView: boolean
 }
 export const DEFAULT_SETTINGS: Settings = {
   theme: "system",
@@ -33,28 +35,36 @@ export const DEFAULT_SETTINGS: Settings = {
   soonDays: 14,
   sort: "deadline-asc",
   home: "San Francisco, CA",
+  defaultView: true,
 }
 
 export type StatusFilter = "live" | "expired" | "all"
 export type DeadlineFilter = "" | "week" | "14" | "30" | "rolling"
+/** posted (first seen) within this many days */
+export type PostedFilter = "" | "3" | "7" | "14" | "30"
+/** start-month filter value for postings that don't say when they start */
+export const START_UNKNOWN = "unknown"
 export interface JobFilters {
   company: string[]
   location: string[]
   category: string[]
   type: string[]
   deadline: DeadlineFilter
+  posted: PostedFilter
+  /** months "1"-"12" the internship can start in, or START_UNKNOWN */
+  start: string[]
   status: StatusFilter
   /** only postings added since this person's previous visit (the dashboard's "new since" link) */
   newOnly?: boolean
 }
-export const EMPTY_FILTERS: JobFilters = { company: [], location: [], category: [], type: [], deadline: "", status: "live" }
+export const EMPTY_FILTERS: JobFilters = { company: [], location: [], category: [], type: [], deadline: "", posted: "", start: [], status: "live" }
 /** "state:CA" in the location filter matches every site in that state */
 export const STATE_PREFIX = "state:"
 /** "region:bay" in the location filter matches every Bay Area site (isBayArea in lib/data.ts) */
 export const BAY_AREA = "region:bay"
 /**
  * What the job board shows on a first visit: live drug discovery and development roles in the
- * Bay Area. Students can widen or clear these; Reset comes back here.
+ * Bay Area. Students can widen or clear these; Reset comes back here. Settings.defaultView turns it off.
  */
 export const DEFAULT_FILTERS: JobFilters = { ...EMPTY_FILTERS, category: ["discovery", "development"], location: [BAY_AREA], status: "live" }
 

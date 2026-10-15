@@ -1523,6 +1523,12 @@ CATEGORY_RULES = [
 
 
 def guess_category(title: str, text: str = "") -> str:
+    # a drug-pipeline area in the title comes first, so "Intern - Research - Drug Metabolism - AI" is discovery,
+    # not tech (the classifier in scraper/classify.py uses the same check)
+    from classify import stage_from_title
+    stage = stage_from_title(title)
+    if stage:
+        return stage
     t = title.lower()
     for cat, rx in CATEGORY_RULES:
         if re.search(rx, t):
@@ -1659,10 +1665,74 @@ def us_locations(p: Posting) -> list[str]:
     return out
 
 
+# ---- internship start window ----
+_MONTHS = {m: i + 1 for i, m in enumerate(["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"])}
+_MON = r"(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|June?|July?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\b\.?"
+
+
+def _m(name: str) -> str:
+    """one month mention, its month captured as `name`: "late May", "Monday, June 1, 2027", "June of 2027"."""
+    return (rf"(?:(?i:early|mid|late)[- ]?)?(?:(?:Mon|Tues|Wednes|Thurs|Fri|Satur|Sun)day,?\s+)?(?P<{name}>{_MON})"
+            rf"(?:\s+\d{{1,2}}(?:st|nd|rd|th)?)?(?:,?\s*(?i:of\s+)?(?:20\d\d))?")
+
+
+_TO = r"\s*(?:[–—-]|(?i:to|through|thru|until)\b)\s*"
+# "10-12 weeks between May and August": the internship sits somewhere inside, so it can start as late as July
+_WINDOW = re.compile(rf"(?i:\bbetween|\bduring(?: the months of)?)\s+{_m('a')}\s*(?:(?i:and\b)|{_TO})\s*{_m('b')}")
+# "beginning in May or June", "starting May 26, 2027", "start date: June 1"
+_START = re.compile(rf"(?i:\bbegin\w*|\bstart\w*|\bcommenc\w*)(?:\s+(?i:in|on|around|date:?|dates:?|of))*\s+{_m('a')}"
+                    rf"(?:\s*(?:(?i:or\b)|/)\s*{_m('b')})?")
+# a fixed term: "Program Dates: Monday June 1 - Friday, August 14", co-ops "from January-August, May/June-December"
+_TERM = re.compile(rf"{_m('a')}(?:\s*/\s*{_m('c')})?{_TO}{_m('b')}")
+_TERM_CONTEXT = re.compile(r"intern|co-?op|program|weeks|months?\b|role|term\b|take place|hours per week|position|summer|full[- ]time", re.I)
+_NOT_WORK = re.compile(r"graduat|degree|enrol|semester|academic|appl(?:y|ications?) (?:by|before|deadline|window|period|clos)|"
+                       r"deadline|review|r[eé]sum[eé]|interview|post(?:ed|ing)", re.I)
+
+
+def _month(s: str | None) -> int | None:
+    return _MONTHS.get(s[:3].lower()) if s else None
+
+
+def start_window(text: str) -> tuple[int | None, int | None]:
+    """The earliest and latest month (1-12) the internship can start, from what the posting says; (None, None)
+    when it doesn't say. "between May and August" gives (5, 7): a 10-12 week internship inside that window starts
+    by July at the latest. Graduation and application dates are ignored."""
+    text = re.sub(r"\s+", " ", text or "")
+    starts: list[int] = []
+    ends: list[int] = []
+    taken: list[tuple[int, int]] = []
+
+    def free(m) -> bool:
+        return not any(a < m.end() and m.start() < b for a, b in taken) and not _NOT_WORK.search(text[max(0, m.start() - 60):m.start()])
+
+    for m in _WINDOW.finditer(text):
+        a, b = _month(m.group("a")), _month(m.group("b"))
+        if a and b and free(m):
+            taken.append(m.span())
+            starts.append(a)
+            ends.append(max(a, b - 1) if b >= a else a)
+    for m in _START.finditer(text):
+        a, b = _month(m.group("a")), _month(m.group("b"))
+        if a and free(m):
+            taken.append(m.span())
+            starts.append(a)
+            ends.append(b or a)
+    for m in _TERM.finditer(text):
+        a, c = _month(m.group("a")), _month(m.group("c"))
+        if a and free(m) and _TERM_CONTEXT.search(text[max(0, m.start() - 100):m.end() + 40]):
+            taken.append(m.span())
+            starts.append(a)
+            ends.append(c or a)
+    if not starts:
+        return None, None
+    return min(starts), max(ends)
+
+
 def to_import_record(p: Posting) -> dict:
     """One posting in the format lib/importer.ts reads. Claude's extraction (scraper/extract.py)
     can later replace summary, responsibilities, qualifications, category, term and mode."""
     sec = extract_sections(p.description)
+    start_from, start_to = start_window(p.description)
     return {
         "key": posting_key(p),
         "title": p.title,
@@ -1679,6 +1749,9 @@ def to_import_record(p: Posting) -> dict:
         "description": job_summary(p.description, p.company, p.title),
         "responsibilities": sec["resp"],
         "qualifications": sec["quals"],
+        # earliest and latest month (1-12) the internship can start; null when the posting doesn't say
+        "start_from": start_from,
+        "start_to": start_to,
     }
 
 

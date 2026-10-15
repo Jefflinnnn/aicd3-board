@@ -237,6 +237,18 @@ class Decisions(unittest.TestCase):
             broken.d3 = mock.Mock(classify=mock.Mock(side_effect=RuntimeError("out of memory")))
             self.assertEqual(broken.classify("Data Science Intern", "Amgen", "Python and SQL").backend, "rules")
 
+    def test_pipeline_title_beats_tech(self):
+        # Gilead R0055519 / R0055526: AI-heavy roles inside a research team were filed under tech
+        clf = c.Classifier("rules", cache_path=None)
+        clf.d3 = FakeD3({"computational": {"yes": 0.9, "no": 0.1}, "category": {"tech": 0.7, "discovery": 0.3}})
+        for title, cat in [("Intern - Research - Drug Metabolism - AI", "discovery"),
+                           ("Intern - Research - Clinical Virology - AI", "development"),
+                           ("AI Research Intern", "tech"), ("Software Engineering Intern", "tech")]:
+            self.assertEqual(clf.classify(title, "Gilead", "Build AI agents and LLM workflows.").category, cat, title)
+        for title, cat in [("Intern - Research - Drug Metabolism - AI", "discovery"),
+                           ("Intern - Research - Clinical Virology - AI", "development")]:
+            self.assertEqual(c.rules_classify(title, "Gilead", "Implement AI tools, models and agents.").category, cat, title)
+
     def test_unreachable_server_warns_and_uses_rules(self):
         for backend in ("auto", "d3"):
             with self.assertLogs("classify", "WARNING") as logs:

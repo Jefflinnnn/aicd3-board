@@ -37,6 +37,9 @@ export interface Job {
   closed?: boolean
   /** When an admin or import added it (ms). Sample postings only carry the first-seen date. */
   addedAt?: number
+  /** Earliest and latest month (1-12) the internship can start, when the posting says. */
+  startFrom?: number
+  startTo?: number
 }
 
 /** Why a posting is held back from students, and where it stands with staff. */
@@ -83,10 +86,29 @@ export const fmt = (s: string, o?: Intl.DateTimeFormatOptions) => {
 }
 /** Postings with no fixed deadline count as open for this many days after we first see them. */
 export const ROLLING_DAYS = 90
+/**
+ * Companies list the date a posting comes down, and it's gone that day: a posting "closing Oct 16" takes its
+ * last applications on Oct 15. So a deadline is exclusive, and every countdown runs to the day before it.
+ */
+export const lastDay = (j: Job): Date | null => (j.deadline ? addDays(parse(j.deadline), -1) : null)
+/** the last day to apply, YYYY-MM-DD ("" when rolling) */
+export const applyBy = (j: Job) => (j.deadline ? iso(lastDay(j) as Date) : "")
 export const isLive = (j: Job) =>
-  !j.closed && (j.deadline ? parse(j.deadline) >= TODAY : diffDays(TODAY, parse(j.posted)) <= ROLLING_DAYS)
-export const daysLeft = (j: Job) => (j.deadline ? diffDays(parse(j.deadline), TODAY) : null)
+  !j.closed && (j.deadline ? (lastDay(j) as Date) >= TODAY : diffDays(TODAY, parse(j.posted)) <= ROLLING_DAYS)
+/** days left to apply: 0 on the last day, 1 the day before ("" deadline: null) */
+export const daysLeft = (j: Job) => (j.deadline ? diffDays(lastDay(j) as Date, TODAY) : null)
 export const ageDays = (j: Job) => diffDays(TODAY, parse(j.posted))
+
+export const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]
+/** "May to July", "June", or "" when the posting doesn't say when it starts */
+export const startLabel = (j: Job) =>
+  !j.startFrom ? "" : !j.startTo || j.startTo === j.startFrom ? MONTH_NAMES[j.startFrom - 1] : `${MONTH_NAMES[j.startFrom - 1]} to ${MONTH_NAMES[j.startTo - 1]}`
+/** whether the internship can start in `month` (1-12); a window may wrap the year (November to February) */
+export const canStartIn = (j: Job, month: number) => {
+  if (!j.startFrom) return false
+  const a = j.startFrom, b = j.startTo || j.startFrom
+  return a <= b ? month >= a && month <= b : month >= a || month <= b
+}
 
 /* ---------- reference data ---------- */
 export interface Category { id: CatId; label: string; short: string; color: string; custom?: boolean }

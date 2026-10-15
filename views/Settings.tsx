@@ -11,7 +11,7 @@ import { Segmented } from "@/components/Segmented"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { PageHead } from "@/components/common"
 import { DEFAULT_SETTINGS, SORT_PRESETS, useApp, type ThemePref } from "@/lib/state"
-import { HOME_CITIES, coById, fmt, jobLocations, parse, store } from "@/lib/data"
+import { HOME_CITIES, coById, fmt, jobLocations, lastDay, store } from "@/lib/data"
 
 type DownloadsCap = { save(r: { filename: string; data: string }): Promise<unknown> }
 
@@ -71,9 +71,9 @@ export default function SettingsPage() {
   const exportDeadlines = async () => {
     if (!downloads) return
     const rows = withDeadline.map((j) => {
-      const d = parse(j.deadline)
+      const d = lastDay(j) as Date // the last day applications are taken (the listed date is when the posting comes down)
       const date = `${String(d.getMonth() + 1).padStart(2, "0")}/${String(d.getDate()).padStart(2, "0")}/${d.getFullYear()}`
-      return [`Deadline: ${j.title} (${coById(j.company).name})`, date, "True", `${mine.status[j.id] === "applied" ? "Applied" : "Saved"}. ${j.url}`].map(csvCell).join(",")
+      return [`Last day to apply: ${j.title} (${coById(j.company).name})`, date, "True", `${mine.status[j.id] === "applied" ? "Applied" : "Saved"}. The posting comes down ${fmt(j.deadline)}. ${j.url}`].map(csvCell).join(",")
     })
     try {
       await downloads.save({ filename: "internship-deadlines.csv", data: ["Subject,Start Date,All Day Event,Description", ...rows].join("\n") })
@@ -118,6 +118,9 @@ export default function SettingsPage() {
               {HOME_CITIES.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}
             </SelectContent>
           </Select>
+        </Row>
+        <Row title="Start with the default view" desc="Opens the job board on live drug discovery and development roles in the Bay Area. Turn off to start with every role." id="ldefault">
+          <Switch aria-labelledby="ldefault" checked={settings.defaultView} onCheckedChange={(c) => setSettings({ defaultView: c })} />
         </Row>
         <Row title="Closing-soon window" desc="Deadlines inside this window are highlighted and counted on the dashboard.">
           <Segmented size="md" value={String(settings.soonDays)} onChange={(v) => setSettings({ soonDays: Number(v) })} label="Closing-soon window" items={["7", "14", "30"].map((v) => [v, `${v} days`] as [string, string])} />
