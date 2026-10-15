@@ -193,6 +193,11 @@ model SiteMeta {
   /// run the scraper pipeline on its own every `refreshHours` (Admin: Job data refresh)
   autoRefresh  Boolean   @default(false)
   refreshHours Int       @default(48)
+  /// a refresh asked for on the Admin page of a server that can't run the scraper (the live site on Vercel):
+  /// the GPU PC checks every few minutes (scraper/refresh_requests.ps1), takes it and runs it
+  refreshRequestedAt DateTime?
+  /// the staff member's profile id
+  refreshRequestedBy String?
 }
 
 enum ScrapeStatus {

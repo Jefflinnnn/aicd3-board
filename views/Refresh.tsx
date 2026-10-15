@@ -1,7 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useRef, useState } from "react"
-import { AlertTriangle, Cpu, RefreshCw, Square } from "lucide-react"
+import { AlertTriangle, Clock, Cpu, RefreshCw, Square, X } from "lucide-react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
@@ -120,13 +120,35 @@ export function Refresh() {
           <Button variant="outline" disabled={busy} onClick={() => act(stopRefresh, "Stopping the refresh…")}>
             <Square className="size-3.5" /> Stop
           </Button>
+        ) : st?.requested ? (
+          <Button variant="outline" disabled={busy} onClick={() => act(stopRefresh, "Request withdrawn")}>
+            <X className="size-3.5" /> Cancel request
+          </Button>
         ) : (
-          <Button disabled={busy || !st || !!st.problem} onClick={() => act(async () => { const r = await refreshNow(); if (!r.started) toast("A refresh is already running.") }, "Refresh started. You can leave this page; it keeps going.")}>
+          <Button
+            disabled={busy || !st || !!st.problem}
+            onClick={() => act(async () => {
+              const r = await refreshNow()
+              if (r.queued) toast("Refresh requested", { description: "The GPU PC starts it within 5 minutes, with d3. You can leave this page." })
+              else if (r.started) toast("Refresh started. You can leave this page; it keeps going.")
+              else toast("A refresh is already running.")
+            })}
+          >
             <RefreshCw className="size-4" /> Refresh now
           </Button>
         )
       }
     >
+      {st?.requested && !running && (
+        <p className={cn("mb-3 flex items-start gap-2 rounded-md px-3 py-2 text-sm", now && now - st.requested.at > 15 * 6e4 ? "bg-warn-soft text-warn" : "bg-muted text-muted-foreground")}>
+          <Clock className="mt-0.5 size-4 shrink-0" />
+          <span>
+            Refresh requested {when(st.requested.at)}{st.requested.by ? ` by ${st.requested.by}` : ""}. The GPU PC checks every 5 minutes and
+            starts it then; scheduled refreshes aren&apos;t affected.
+            {now && now - st.requested.at > 15 * 6e4 ? " It hasn't been picked up yet: check that the GPU PC is on and signed in, and that its request check is set up (scraper\\register_daily_refresh.ps1 -Status)." : ""}
+          </span>
+        </p>
+      )}
       {st?.problem && (
         <p className="mb-3 flex items-start gap-2 rounded-md bg-warn-soft px-3 py-2 text-sm text-warn">
           <AlertTriangle className="mt-0.5 size-4 shrink-0" /> {st.problem}

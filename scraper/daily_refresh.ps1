@@ -4,6 +4,8 @@
 #   powershell -ExecutionPolicy Bypass -File scraper\daily_refresh.ps1             # a real refresh
 #   powershell -ExecutionPolicy Bypass -File scraper\daily_refresh.ps1 -DryRun     # what would change; nothing saved
 #   ... -AllowRules     # if d3 can't be reached, classify with keyword rules instead of stopping
+#   ... -Manual         # label it a manual refresh on the Admin page (scraper\refresh_requests.ps1 passes this
+#                       # when someone pressed "Refresh now" on the live site; run it yourself for a refresh now)
 #
 # It makes sure the d3 model server is up (starting it if needed), then runs scraper\pipeline.py against
 # AICD3_URL from .env.local: scrape, classify with d3, import into the live site, re-check open postings.
@@ -13,7 +15,7 @@
 # shows it as failed, with the reason); if d3 stops answering partway, nothing is imported; a posting d3 couldn't
 # classify goes to the review queue. -AllowRules goes back to classifying with keyword rules when d3 is down.
 # Logs: scraper\out\logs\pipeline-<date>-<time>.log (full run) and scraper\out\logs\daily-refresh.log (one line per run).
-param([switch]$DryRun, [switch]$AllowRules)
+param([switch]$DryRun, [switch]$AllowRules, [switch]$Manual)
 $ErrorActionPreference = "Continue"
 $Root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 Set-Location $Root
@@ -43,10 +45,10 @@ if ($LASTEXITCODE -ne 0) {
 
 Remove-Item "scraper\out\pipeline\last-summary.json" -ErrorAction SilentlyContinue   # never report an older run's counts
 $env:PYTHONUNBUFFERED = "1"; $env:PYTHONIOENCODING = "utf-8"; $env:PYTHONUTF8 = "1"
-$pyArgs = @("scraper\pipeline.py", "--url", $url, "--trigger", "schedule", "--summary-json", "scraper\out\pipeline\last-summary.json")
+$pyArgs = @("scraper\pipeline.py", "--url", $url, "--trigger", $(if ($Manual) { "manual" } else { "schedule" }), "--summary-json", "scraper\out\pipeline\last-summary.json")
 if ($AllowRules) { $pyArgs += @("--classifier", "auto") } else { $pyArgs += "--require-d3" }
 if ($DryRun) { $pyArgs += "--dry-run" }
-Note "refresh started$(if ($DryRun) { ' (dry run)' }) -> $url"
+Note "$(if ($Manual) { 'manual ' })refresh started$(if ($DryRun) { ' (dry run)' }) -> $url"
 & $VPy @pyArgs
 $code = $LASTEXITCODE
 $what = switch ($code) {

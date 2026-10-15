@@ -13,10 +13,16 @@
 # The task runs while you're signed in to Windows (a locked screen is fine; no password is stored). It wakes the PC
 # from sleep to run; if the PC was off or you were signed out at that time, it runs as soon as it can after you sign in.
 # Only one refresh runs at a time.
+#
+# It also registers "AICD3 refresh requests", which checks every 5 minutes (without a window and without waking the
+# PC) whether someone pressed Refresh now on the live site's Admin page, and if so runs the same d3 refresh
+# (scraper\refresh_requests.ps1). It waits while another refresh is running, so it never overlaps the scheduled ones.
 param([string]$Url = "", [string[]]$At = @("9:00AM", "9:00PM"), [string[]]$Days = @("Daily"), [switch]$Remove, [switch]$Status)
 $ErrorActionPreference = "Stop"
 $Root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $TaskName = "AICD3 daily refresh"
+# checks every 5 minutes for "Refresh now" pressed on the live site's Admin page (scraper\refresh_requests.ps1)
+$RequestTask = "AICD3 refresh requests"
 $EnvFile = Join-Path $Root ".env.local"
 
 if ($Status) {
@@ -28,6 +34,9 @@ if ($Status) {
     $result = if ($info.LastTaskResult -eq 0) { "succeeded" } elseif ($info.LastTaskResult -eq 267011) { "never run yet" } else { "exit code $($info.LastTaskResult)" }
     Write-Host "Task '$TaskName': $($task.State) ($when). Last run: $($info.LastRunTime) ($result). Next run: $($info.NextRunTime)."
   }
+  $req = Get-ScheduledTask -TaskName $RequestTask -ErrorAction SilentlyContinue
+  if ($req) { Write-Host "Task '$RequestTask': $($req.State) (checks every 5 minutes for Refresh now on the Admin page; last check $((Get-ScheduledTaskInfo -TaskName $RequestTask).LastRunTime))." }
+  else { Write-Host "Task '$RequestTask' isn't registered: Refresh now on the live site's Admin page won't be picked up. Run this script with -Url to add it." }
   $log = Join-Path $Root "scraper\out\logs\daily-refresh.log"
   if (Test-Path $log) { Write-Host "Recent runs:"; Get-Content $log -Tail 8 } else { Write-Host "No runs logged yet ($log)." }
   exit 0
@@ -35,7 +44,8 @@ if ($Status) {
 
 if ($Remove) {
   Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
-  Write-Host "Removed the '$TaskName' task. The PC no longer refreshes the live site on its own."
+  Unregister-ScheduledTask -TaskName $RequestTask -Confirm:$false -ErrorAction SilentlyContinue
+  Write-Host "Removed the '$TaskName' and '$RequestTask' tasks. The PC no longer refreshes the live site, on a schedule or on request."
   exit 0
 }
 
@@ -97,8 +107,19 @@ $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" 
 Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal `
   -Description "Scrapes internships, classifies them with vllm-sr/d3 on this PC, and updates the AICD3 job board at $Url" -Force | Out-Null
 
+# "Refresh now" on the live site: check every 5 minutes, with no window (run_hidden.vbs) and without waking the PC
+$reqAction = New-ScheduledTaskAction -Execute "wscript.exe" -WorkingDirectory $Root `
+  -Argument "//B `"$(Join-Path $Root 'scraper\run_hidden.vbs')`" `"$(Join-Path $Root 'scraper\refresh_requests.ps1')`""
+$reqTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 5)
+$reqLogon = New-ScheduledTaskTrigger -AtLogOn -User "$env:USERDOMAIN\$env:USERNAME"
+$reqSettings = New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew `
+  -ExecutionTimeLimit (New-TimeSpan -Hours 4) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+Register-ScheduledTask -TaskName $RequestTask -Action $reqAction -Trigger @($reqTrigger, $reqLogon) -Settings $reqSettings -Principal $principal `
+  -Description "Checks every 5 minutes whether Refresh now was pressed on the AICD3 job board's Admin page ($Url) and runs it with d3" -Force | Out-Null
+
 $next = (Get-ScheduledTaskInfo -TaskName $TaskName).NextRunTime
 Write-Host "Registered '$TaskName': $schedule (next run $next), updating $Url. No local server needs to run."
-Write-Host "Try it now:            Start-ScheduledTask -TaskName '$TaskName'"
+Write-Host "Registered '$RequestTask': every 5 minutes it picks up Refresh now from the live site's Admin page."
+Write-Host "Refresh now, from here: powershell -ExecutionPolicy Bypass -File scraper\daily_refresh.ps1 -Manual"
 Write-Host "Check how runs went:   powershell -ExecutionPolicy Bypass -File scraper\register_daily_refresh.ps1 -Status"
 Write-Host "Stop it:               powershell -ExecutionPolicy Bypass -File scraper\register_daily_refresh.ps1 -Remove"
