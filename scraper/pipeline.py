@@ -167,6 +167,25 @@ def build_records(postings: list[pi.Posting], clf: Classifier, on_progress=None,
     return records, report
 
 
+def site_takes_roles(url: str, token: str) -> bool:
+    """Whether the app at url keeps full-time roles apart (kind=job). An older app ignores kind and would import roles
+    as internships: into the review queue, closing that company's internships the run didn't list. Asked with an
+    unknown kind, which a current app refuses (HTTP 400 naming kind) and an older one treats as an empty dry run."""
+    try:
+        r = requests.post(url.rstrip("/") + "/api/ingest?dryRun=1&closeMissing=0&kind=check", timeout=60,
+                          data=b'{"postings": []}', headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
+    except requests.RequestException:
+        return False
+    if r.status_code == 401:
+        raise SystemExit(f"Import check failed: the app at {url} refused the ingest token (it doesn't match SCRAPER_INGEST_TOKEN).")
+    if r.status_code != 400:
+        return False
+    try:
+        return "kind" in str(r.json().get("error", ""))
+    except ValueError:
+        return False
+
+
 def ingest(url: str, token: str, records: list[dict], dry_run: bool, kind: str = "internship") -> dict:
     qs = f"?dryRun={int(dry_run)}&closeMissing=1&reviewAll=0" + ("&kind=job" if kind == "job" else "")
     body = json.dumps({"postings": records}, ensure_ascii=False).encode("utf-8")
@@ -360,6 +379,11 @@ def _main(argv: list[str] | None = None) -> int:
         print("No ingest token. Put SCRAPER_INGEST_TOKEN=<long random value> in .env.local (for example the "
               "output of `openssl rand -hex 32`), restart the app, and run this again.", file=sys.stderr)
         return 1
+
+    if job and not site_takes_roles(args.url, token):
+        # never risk the student board: an app without full-time roles would treat these as internships
+        raise SystemExit(f"The app at {args.url} doesn't support full-time roles yet (deploy the version with the Full-time "
+                         "Roles tab first), so this roles run stopped before scraping and changed nothing.")
 
     names = list(pi.COMPANIES)
     if args.companies:

@@ -324,6 +324,8 @@ class Pipeline(unittest.TestCase):
         sent = {}
 
         def fake_post(url, data=None, headers=None, timeout=None):
+            if "kind=check" in url:   # the pipeline first checks the app keeps roles apart
+                return mock.Mock(status_code=400, json=lambda: {"error": 'kind must be "internship" or "job"'})
             sent.update(url=url, body=json.loads(data))
             return mock.Mock(status_code=200, json=lambda: {"added": 1, "staged": 0, "updated": 0, "closed": 0,
                                                             "unchanged": 0, "rejected": 0, "errors": []})
@@ -354,6 +356,8 @@ class Pipeline(unittest.TestCase):
         sent = {}
 
         def fake_post(url, data=None, headers=None, timeout=None):
+            if "kind=check" in url:
+                return mock.Mock(status_code=400, json=lambda: {"error": 'kind must be "internship" or "job"'})
             sent.update(body=json.loads(data))
             return mock.Mock(status_code=200, json=lambda: {"added": 1, "staged": 0, "updated": 0, "closed": 0,
                                                             "unchanged": 0, "rejected": 0, "errors": []})
@@ -390,6 +394,25 @@ class Pipeline(unittest.TestCase):
         finally:
             pi.set_mode("internship")
             pi.set_job_search()
+
+
+    def test_full_time_roles_never_run_against_an_app_without_them(self):
+        posted = []
+        old_app = lambda url, data=None, headers=None, timeout=None: posted.append(url) or mock.Mock(
+            status_code=200, json=lambda: {"added": 0, "staged": 0, "updated": 0, "closed": 0, "unchanged": 0, "rejected": 0, "errors": []})
+        scraped = mock.Mock(return_value=([], {}))
+        try:
+            with tempfile.TemporaryDirectory() as d, mock.patch.object(pi, "run", scraped), \
+                    mock.patch.object(pipeline.requests, "post", side_effect=old_app), \
+                    mock.patch.dict(os.environ, {"AICD3_INGEST_TOKEN": "t0k", "ROLES_PROFILE": os.path.join(d, "none.json")}):
+                code = pipeline.main(["--kind", "job", "--classifier", "rules", "--out", d, "--url", "http://old.app"])
+        finally:
+            pi.set_mode("internship")
+            pi.set_job_search()
+        self.assertEqual(code, 1)
+        self.assertFalse(scraped.called)                       # stopped before scraping
+        self.assertEqual(len(posted), 1)                       # only the check; nothing imported
+        self.assertIn("kind=check", posted[0])
 
 
 class RequireD3(unittest.TestCase):
