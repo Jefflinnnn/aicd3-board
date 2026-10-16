@@ -75,6 +75,7 @@ export function RolesBoard({ roles, busy, error, onReload }: { roles: Job[] | nu
   const [company, setCompany] = useState("all")
   const [show, setShow] = useState<Show>("all")
   const [open, setOpen] = useState<string | null>(null)
+  const [sort, setSort] = useState<"match" | "newest">("match")
 
   const companies = useMemo(() => [...new Set((roles || []).map((r) => r.company))].sort((a, b) => coById(a).name.localeCompare(coById(b).name)), [roles])
   const list = useMemo(() => {
@@ -94,8 +95,8 @@ export function RolesBoard({ roles, busy, error, onReload }: { roles: Job[] | nu
         if (!words.every((w) => hay.includes(w))) return false
       }
       return true
-    })
-  }, [roles, q, where, level, area, company, show, saved, applied])
+    }).sort((a, b) => (sort === "match" ? (b.score ?? -1) - (a.score ?? -1) : 0) || b.posted.localeCompare(a.posted))
+  }, [roles, q, where, level, area, company, show, saved, applied, sort])
 
   const toggle = (id: string, s: "saved" | "applied") => {
     const has = s === "saved" ? saved.has(id) : applied.has(id)
@@ -137,6 +138,7 @@ export function RolesBoard({ roles, busy, error, onReload }: { roles: Job[] | nu
               {companies.map((c) => <SelectItem key={c} value={c}>{coById(c).name}</SelectItem>)}
             </SelectContent>
           </Select>
+          <Segmented label="Sort" value={sort} onChange={setSort} items={[["match", "Best match"], ["newest", "Newest"]]} />
           <Segmented label="Show" value={show} onChange={setShow} items={[["all", "All"], ["saved", `Saved (${(roles || []).filter((r) => saved.has(r.id)).length})`], ["applied", "Applied"]]} />
         </div>
 
@@ -173,6 +175,12 @@ export function RolesBoard({ roles, busy, error, onReload }: { roles: Job[] | nu
                           {r.title}
                         </button>
                         <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[0.82rem] text-muted-foreground">
+                          {r.score != null && (
+                            <span title="How well it fits your background (d3)" className={cn("rounded-full px-2 py-px text-xs font-semibold tabular-nums",
+                              r.score >= 80 ? "bg-good/15 text-good" : r.score >= 60 ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground")}>
+                              {r.score}% match
+                            </span>
+                          )}
                           <span className="font-medium text-foreground/80">{coById(r.company).name}</span>
                           <LocationCell job={r} />
                           <CatChip id={r.category} />

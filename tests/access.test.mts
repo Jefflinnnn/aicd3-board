@@ -545,7 +545,7 @@ describe("rejected postings stay rejected", () => {
 })
 
 describe("private full-time roles", () => {
-  const jeff = user("u-jeff", "jeff.lin@ucsf.edu")
+  const owner = user("u-owner", "owner@ucsf.edu")
   const token = () => process.env.SCRAPER_INGEST_TOKEN!
   const post = (body: unknown, qs: string) =>
     ingest(new Request("http://localhost/api/ingest" + qs, { method: "POST", body: JSON.stringify(body), headers: { authorization: "Bearer " + token() } }))
@@ -557,7 +557,8 @@ describe("private full-time roles", () => {
   before(async () => {
     await wipe()
     process.env.SIGN_IN_EMAIL_DOMAINS += ",ucsf.edu"
-    await prisma.profile.create({ data: { id: jeff.id, email: jeff.email, emailVerified: true, role: "student", status: "active" } })
+    process.env.PRIVATE_ROLES_EMAILS = owner.email
+    await prisma.profile.create({ data: { id: owner.id, email: owner.email, emailVerified: true, role: "student", status: "active" } })
     await prisma.profile.create({ data: { id: staff.id, email: staff.email, emailVerified: true, role: "staff", status: "active" } })
     await prisma.profile.create({ data: { id: admin.id, email: admin.email, emailVerified: true, role: "admin", status: "active" } })
     await prisma.profile.create({ data: { id: alice.id, email: alice.email, emailVerified: true, role: "student", status: "active" } })
@@ -567,14 +568,14 @@ describe("private full-time roles", () => {
 
   it("an import of roles goes straight to the private tab, never to the review queue, and leaves internships alone", async () => {
     const out = await (await post({ postings: [
-      role("Data Scientist, Pharmacometrics", { req_id: "R1", level: "entry" }),
+      role("Data Scientist, Pharmacometrics", { req_id: "R1", level: "entry", score: 87 }),
       role("Scientist II, Computational Biology", { req_id: "R2", level: "mid", review_reason: "May need more than 5 years (45% by d3)" }),
     ] }, "?reviewAll=1&closeMissing=1&kind=job")).json()
     assert.equal(out.added, 2)
     assert.equal(out.staged, 0)
     assert.equal(out.closed, 0)   // the internship from the same company isn't touched
     const rows = await prisma.posting.findMany({ where: { kind: "job" }, orderBy: { reqId: "asc" } })
-    assert.deepEqual(rows.map((r) => [r.state, r.level]), [["live", "entry"], ["live", "mid"]])
+    assert.deepEqual(rows.map((r) => [r.state, r.level, r.score]), [["live", "entry", 87], ["live", "mid", null]])
     assert.match(rows[1].note, /May need more than 5 years/)
     assert.equal((await prisma.posting.findUnique({ where: { id: "intern1" } }))?.closed, false)
     // and an internship run never closes roles
@@ -583,10 +584,10 @@ describe("private full-time roles", () => {
     assert.equal((await prisma.posting.findUnique({ where: { id: "intern1" } }))?.closed, true)
   })
 
-  it("only jeff.lin@ucsf.edu can load them; staff, admins and students can't", async () => {
-    as(jeff)
+  it("only PRIVATE_ROLES_EMAILS can load them; staff, admins and students can't", async () => {
+    as(owner)
     const r = await A.loadState()
-    if (r.mode !== "cloud") return assert.fail("jeff should be active")
+    if (r.mode !== "cloud") return assert.fail("the owner should be active")
     assert.equal(r.me.roles, true)
     assert.ok(r.jobs.every((j) => !j.kind))   // the board itself has internships only
     const { roles } = await A.loadRoles()
@@ -604,19 +605,19 @@ describe("private full-time roles", () => {
     }
   })
 
-  it("an unverified jeff.lin@ucsf.edu gets nothing", async () => {
-    await prisma.profile.update({ where: { id: jeff.id }, data: { emailVerified: false } })
-    as({ ...jeff, emailVerified: false })
+  it("an unverified address in PRIVATE_ROLES_EMAILS gets nothing", async () => {
+    await prisma.profile.update({ where: { id: owner.id }, data: { emailVerified: false } })
+    as({ ...owner, emailVerified: false })
     await assert.rejects(A.loadRoles())
-    await prisma.profile.update({ where: { id: jeff.id }, data: { emailVerified: true } })
+    await prisma.profile.update({ where: { id: owner.id }, data: { emailVerified: true } })
   })
 
-  it("only Jeff can save a role; staff actions can't touch one", async () => {
+  it("only the owner can save a role; staff actions can't touch one", async () => {
     const r1 = (await prisma.posting.findFirst({ where: { reqId: "R1" } }))!
-    as(jeff)
+    as(owner)
     await A.setStatus([r1.id], "saved")
     await A.setNote(r1.id, "apply by Friday")
-    assert.equal(await prisma.jobStatus.count({ where: { postingId: r1.id, userId: jeff.id } }), 1)
+    assert.equal(await prisma.jobStatus.count({ where: { postingId: r1.id, userId: owner.id } }), 1)
     as(alice)
     await A.setStatus([r1.id], "saved")
     assert.equal(await prisma.jobStatus.count({ where: { postingId: r1.id, userId: alice.id } }), 0)

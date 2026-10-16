@@ -143,7 +143,8 @@ def build_records(postings: list[pi.Posting], clf: Classifier, on_progress=None,
         rec = pi.to_import_record(p)
         rec["category"] = v.category
         if job:
-            rec.update(term="Full-time", start_from=None, start_to=None, level=v.level)
+            # score: how well it fits (d3's fit probability, as a percentage), for sorting the private tab
+            rec.update(term="Full-time", start_from=None, start_to=None, level=v.level, score=round(v.computational * 100))
         # Claude's own reading of the posting, when it wrote one (better than heading-matching on odd formats)
         if v.summary:
             rec["description"] = v.summary
@@ -337,6 +338,17 @@ def _main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
     job = args.kind == "job"
     pi.set_mode(args.kind)
+    profile = None
+    if job:
+        # a candidate profile (scraper/private/roles_profile.json, kept off GitHub) tailors the search and the fit test
+        import roles_profile
+        try:
+            profile = roles_profile.load()
+        except ValueError as e:
+            raise SystemExit(f"Roles profile: {e}")
+        pi.set_job_search(profile.terms if profile else None, profile.title_words if profile else None)
+        print(f"roles profile: {'used, ' + str(len(pi.JOB_SEARCH)) + ' search terms' if profile else 'none (general AICD3-graduate fit test)'}",
+              flush=True)
     if job:
         args.no_check = True
         if args.out == os.path.join(ROOT, "scraper", "out", "pipeline"):
@@ -381,7 +393,7 @@ def _main(argv: list[str] | None = None) -> int:
     _stop_if_asked(prog)
     step("2/4 classify", f"{len(postings)} postings")
     prog.step("classify")
-    clf = Classifier("d3" if args.require_d3 else args.classifier, job=job)
+    clf = Classifier("d3" if args.require_d3 else args.classifier, job=job, profile=profile)
     prog.classifier(clf.name)
     print(f"classifier: {clf.name}", flush=True)
     if clf.fallback_reason:

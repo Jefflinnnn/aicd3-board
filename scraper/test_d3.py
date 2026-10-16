@@ -209,8 +209,9 @@ class FullTimeRoles(unittest.TestCase):
         with Server() as s:
             clf = self.classifier(s)
             recs, report = pipeline.build_records(ps, clf, job=True)
-            state, questions = s.model.asked[0]
-        self.assertTrue(state.startswith("Role title: Data Scientist"))
+        # d3 is asked two at a time, so in no fixed order: find the first posting's question by its text
+        state, questions = next((st, q) for st, q in s.model.asked if "Data Scientist, Pharmacometrics" in st)
+        self.assertTrue(state.startswith("Role title: Data Scientist, Pharmacometrics"))
         self.assertEqual(set(questions), {"computational", "category", "seniority", "us"})
         self.assertIn("recent graduate", questions["computational"]["instructions"])
         self.assertEqual([r["decision"] for r in report], ["publish", "publish", "skip", "review", "skip"])
@@ -224,6 +225,42 @@ class FullTimeRoles(unittest.TestCase):
             with mock.patch.object(c, "env", side_effect=lambda n: s.url if n == "D3_URL" else ""):
                 intern, job = c.Classifier("auto", cache_path=None), c.Classifier("auto", cache_path=None, job=True)
             self.assertNotEqual(intern._key("ML", "Amgen", "x", "CA"), job._key("ML", "Amgen", "x", "CA"))
+
+    def test_a_candidate_profile_tailors_the_fit_question(self):
+        import roles_profile
+        prof = roles_profile.Profile("Builds graph neural networks for ADMET prediction.", ["admet"], [])
+        with Server() as s:
+            with mock.patch.object(c, "env", side_effect=lambda n: s.url if n == "D3_URL" else ""):
+                plain = c.Classifier("auto", cache_path=None, job=True)
+                tailored = c.Classifier("auto", cache_path=None, job=True, profile=prof)
+            tailored.classify("Scientist, ADMET", "Genentech", "Build GNNs", "South San Francisco, CA")
+            q = s.model.asked[-1][1]["computational"]["instructions"]
+        self.assertIn("Candidate: Builds graph neural networks for ADMET prediction.", q)
+        # answers for one profile are never reused for another, or for no profile
+        self.assertNotEqual(plain._key("t", "Amgen", "x", "CA"), tailored._key("t", "Amgen", "x", "CA"))
+        other = c.Classifier("rules", cache_path=None, job=True, profile=roles_profile.Profile("Something else.", [], []))
+        self.assertNotEqual(other._key("t", "Amgen", "x"), c.Classifier("rules", cache_path=None, job=True, profile=prof)._key("t", "Amgen", "x"))
+
+    def test_profile_files(self):
+        import roles_profile
+        with tempfile.TemporaryDirectory() as d:
+            f = os.path.join(d, "p.json")
+            self.assertIsNone(roles_profile.load(f))
+            for bad in ({"summary": ""}, {"summary": "x" * 2001}, {"summary": "Call (415) 555-0100"},
+                        {"summary": "see https://example.com"}):
+                with open(f, "w") as fh:
+                    json.dump(bad, fh)
+                with self.assertRaises(ValueError):
+                    roles_profile.load(f)
+            with open(f, "w") as fh:
+                json.dump({"summary": " ML  for chemistry ", "terms": ["ADMET ", ""], "title_words": ["Applied Scientist"]}, fh)
+            p = roles_profile.load(f)
+            self.assertEqual((p.summary, p.terms, p.title_words), ("ML for chemistry", ["admet"], ["applied scientist"]))
+        # the example in the repository loads, and the real profile's folder is git-ignored
+        here = os.path.dirname(os.path.abspath(__file__))
+        self.assertIsNotNone(roles_profile.load(os.path.join(here, "roles_profile.example.json")))
+        with open(os.path.join(os.path.dirname(here), ".gitignore")) as fh:
+            self.assertIn("/scraper/private/", fh.read())
 
     def test_llm_is_refused_for_jobs(self):
         with self.assertRaises(ValueError):

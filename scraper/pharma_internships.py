@@ -173,6 +173,10 @@ SENIOR_TITLE_RE = re.compile(
 SENIOR_OK_RE = re.compile(r"post-?doc", re.I)
 
 
+JOB_SEARCH = list(JOB_TERMS)     # what full-time roles mode searches for (a candidate profile can replace it)
+EXTRA_TITLE_RE: re.Pattern | None = None   # extra titles a candidate profile adds
+
+
 def set_mode(mode: str) -> None:
     """"internship" (the student board) or "job" (full-time roles). Set before run()."""
     global MODE
@@ -181,10 +185,19 @@ def set_mode(mode: str) -> None:
     MODE = mode
 
 
+def set_job_search(terms: list[str] | None = None, title_words: list[str] | None = None) -> None:
+    """Tailor full-time roles mode to a candidate (scraper/roles_profile.py): its search terms replace the defaults,
+    and its title words count as computational titles too. No arguments: back to the defaults."""
+    global JOB_SEARCH, EXTRA_TITLE_RE
+    JOB_SEARCH = list(terms) if terms else list(JOB_TERMS)
+    words = [w for w in (title_words or []) if w.strip()]
+    EXTRA_TITLE_RE = re.compile("|".join(re.escape(w) for w in words), re.I) if words else None
+
+
 def is_target_role(title: str) -> bool:
     """A junior to mid-level computational role: not an internship, not senior, and a computational title."""
     t = title or ""
-    if is_internship(t) or not JOB_TITLE_RE.search(t):
+    if is_internship(t) or not (JOB_TITLE_RE.search(t) or (EXTRA_TITLE_RE and EXTRA_TITLE_RE.search(t))):
         return False
     senior = {m.group(1).lower() for m in SENIOR_TITLE_RE.finditer(t)}
     return not senior or (senior == {"fellow"} and bool(SENIOR_OK_RE.search(t)))
@@ -197,7 +210,7 @@ def wanted(title: str) -> bool:
 
 def search_terms(cfg: dict, default: list[str]) -> list[str]:
     """What to type into a careers site's search box. A company's own "terms" are internship words."""
-    return JOB_TERMS if MODE == "job" else cfg.get("terms", default)
+    return JOB_SEARCH if MODE == "job" else cfg.get("terms", default)
 
 
 YEARS_RE = re.compile(

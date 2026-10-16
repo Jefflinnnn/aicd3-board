@@ -103,6 +103,8 @@ model Posting {
   level     String       @default("")
   /// full-time roles: why d3 was unsure about it (they never go to the staff review queue)
   note      String       @default("")
+  /// full-time roles: how well it fits (d3's fit probability, 0-100)
+  score     Int?
   mode      String       @default("Onsite")
   pay       String       @default("")
   url       String

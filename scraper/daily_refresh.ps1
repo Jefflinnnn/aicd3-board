@@ -80,7 +80,7 @@ try {
 } catch {}
 Note "refresh $what. $summary"
 
-# the private full-time roles (only jeff.lin@ucsf.edu sees them): same companies, d3 checks fit and seniority
+# the private full-time roles (only PRIVATE_ROLES_EMAILS see them): same companies, d3 checks fit and seniority
 if (-not $NoRoles -and $code -ne 3 -and $code -ne 130) {
   $rolesArgs = @("scraper\pipeline.py", "--kind", "job", "--url", $url, "--trigger", $(if ($Manual) { "manual" } else { "schedule" }))
   if ($AllowRules) { $rolesArgs += @("--classifier", "auto") } else { $rolesArgs += "--require-d3" }

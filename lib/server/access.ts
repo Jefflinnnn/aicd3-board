@@ -104,12 +104,13 @@ export const isStaff = (r: Role) => r === "staff" || r === "admin"
 
 /**
  * Who may see the private Full-time roles tab: the emails in PRIVATE_ROLES_EMAILS (comma-separated), by default
- * jeff.lin@ucsf.edu, once that email is verified and the account approved. Being staff or admin doesn't grant it.
+ * nobody, so it stays off until set in the deployment's environment (never in the repository). The address must be
+ * verified and the account approved. Being staff or admin doesn't grant it.
  */
 export function canSeeRoles(v: { email: string | null; emailVerified: boolean; status: string }) {
   if (!v.emailVerified || v.status !== "active") return false
   const email = v.email
-  const allowed = (process.env.PRIVATE_ROLES_EMAILS ?? "jeff.lin@ucsf.edu").split(",").map((e) => e.trim().toLowerCase()).filter(Boolean)
+  const allowed = (process.env.PRIVATE_ROLES_EMAILS ?? "").split(",").map((e) => e.trim().toLowerCase()).filter(Boolean)
   return !!email && allowed.includes(email.trim().toLowerCase())
 }
 

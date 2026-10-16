@@ -125,6 +125,21 @@ JOB_COMPUTATIONAL_Q = (
     "the role is mainly lab bench work, manufacturing, clinical operations, sales, marketing, finance, HR or "
     "communications."
 )
+
+
+def job_fit_q(summary: str) -> str:
+    """The fit question for one candidate (scraper/roles_profile.py): the same bar as JOB_COMPUTATIONAL_Q, judged
+    against what this person has actually done."""
+    return (
+        "Is this full-time role a good fit for the candidate described below, because its core work is machine "
+        "learning, AI or computational work in drug discovery or development that matches the candidate's skills and "
+        "experience, or that they could step into with 0 to 5 years of experience? "
+        "Answer no when the computational part is only spreadsheets, dashboards, reporting or IT support, when the "
+        "role is mainly lab bench work, manufacturing, clinical operations, sales, marketing, finance, HR or "
+        "communications, or when it needs core skills the candidate doesn't have.\n\nCandidate: " + summary
+    )
+
+
 JOB_CATEGORY_Q = "Which part of the pharmaceutical pipeline does this role belong to?"
 SENIORITY_Q = "How much professional experience does this role ask for, counting the most lenient route it offers (for example a PhD with fewer years)?"
 SENIORITY = {
@@ -377,9 +392,11 @@ class D3:
     """vllm-sr/d3, asked over HTTP: the model runs in scraper/d3_server.py on this computer's GPU.
     Construction checks the server answers, so an unreachable server is noticed once, before classifying."""
 
-    def __init__(self, url: str | None = None, session=None, timeout: float = 120.0, job: bool = False):
+    def __init__(self, url: str | None = None, session=None, timeout: float = 120.0, job: bool = False,
+                 fit_q: str = ""):
         import requests
         self.job = job
+        self.fit_q = fit_q or JOB_COMPUTATIONAL_Q
         self.url = (url or env("D3_URL") or D3_URL_DEFAULT).rstrip("/")
         self.http = session or requests.Session()
         self.timeout = timeout
@@ -413,7 +430,7 @@ class D3:
             "level": {"type": "choice", "instructions": LEVEL_Q, "criteria": LEVELS},
             "us": {"type": "noul", "instructions": US_Q},
         } if not self.job else {
-            "computational": {"type": "noul", "instructions": JOB_COMPUTATIONAL_Q},
+            "computational": {"type": "noul", "instructions": self.fit_q},
             "category": {"type": "choice", "instructions": JOB_CATEGORY_Q, "criteria": CATEGORIES},
             "seniority": {"type": "choice", "instructions": SENIORITY_Q, "criteria": SENIORITY},
             "us": {"type": "noul", "instructions": JOB_US_Q},
@@ -589,12 +606,13 @@ class Classifier:
     if the model errors on one."""
 
     def __init__(self, backend: str = "auto", cache_path: str | None = CACHE_PATH, llm_client=None, d3_session=None,
-                 job: bool = False):
+                 job: bool = False, profile=None):
         """job: classify full-time roles (pipeline.py --kind job) with their own d3 questions: fit for a recent
         graduate, area, seniority and US. Claude's prompt is written for internships, so job mode uses d3 (or rules)."""
         if job and backend == "llm":
             raise ValueError("full-time roles are classified by d3 (or keyword rules), not --classifier llm")
         self.job = job
+        self.profile = profile if job else None   # scraper/roles_profile.py: tailors the fit question to one candidate
         self.backend, self.d3, self.llm, self.cache_path = backend, None, None, cache_path
         self.llm_failures, self.d3_failures, self._lock = 0, 0, threading.Lock()
         self.fallback_reason = ""   # why the model wasn't used (for some or all of this run), for the run summary
@@ -605,7 +623,7 @@ class Classifier:
                 raise ConnectionError(why)
         elif backend in ("auto", "d3"):
             try:
-                self.d3 = D3(session=d3_session, job=job)
+                self.d3 = D3(session=d3_session, job=job, fit_q=job_fit_q(self.profile.summary) if self.profile else "")
             except Exception as e:  # server not started, still loading, wrong D3_URL...
                 self.fallback_reason = f"d3 not used: {str(e)[:280]}"
                 log.warning("d3 unavailable (%s). Using keyword rules for this run.", str(e)[:300])
@@ -624,7 +642,7 @@ class Classifier:
     def _key(self, title: str, company: str, description: str, location: str = "") -> str:
         model = self.llm.model if self.llm else self.d3.model if self.d3 else ""
         text = posting_text(title, company, description, location if self.d3 else "", self.job)
-        version = f"job{JOB_QUESTIONS_V}" if self.job else QUESTIONS_V
+        version = (f"job{JOB_QUESTIONS_V}" + (f"/{self.profile.version}" if self.profile else "")) if self.job else QUESTIONS_V
         return hashlib.sha256(f"{self.name}\n{model}\n{version}\n{text}".encode()).hexdigest()[:24]
 
     def peek(self, title: str, company: str, description: str, location: str = "") -> Verdict | None:

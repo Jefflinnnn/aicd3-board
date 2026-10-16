@@ -103,8 +103,8 @@ function day(v: unknown): string | null {
 }
 
 const sameish = (a: Job, b: Job) =>
-  JSON.stringify([a.title, a.company, jobLocations(a), a.category, a.deadline, a.term, a.mode, a.pay, a.url, a.reqId || "", a.summary, a.resp, a.quals, !!a.closed, a.startFrom ?? 0, a.startTo ?? 0, a.level || "", a.note || ""]) ===
-  JSON.stringify([b.title, b.company, jobLocations(b), b.category, b.deadline, b.term, b.mode, b.pay, b.url, b.reqId || "", b.summary, b.resp, b.quals, !!b.closed, b.startFrom ?? 0, b.startTo ?? 0, b.level || "", b.note || ""])
+  JSON.stringify([a.title, a.company, jobLocations(a), a.category, a.deadline, a.term, a.mode, a.pay, a.url, a.reqId || "", a.summary, a.resp, a.quals, !!a.closed, a.startFrom ?? 0, a.startTo ?? 0, a.level || "", a.note || "", a.score ?? -1]) ===
+  JSON.stringify([b.title, b.company, jobLocations(b), b.category, b.deadline, b.term, b.mode, b.pay, b.url, b.reqId || "", b.summary, b.resp, b.quals, !!b.closed, b.startFrom ?? 0, b.startTo ?? 0, b.level || "", b.note || "", b.score ?? -1])
 
 const MONTHS3 = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
 /** a month 1-12 from 5, "5", "May" or "may"; undefined when blank or unreadable */
@@ -250,7 +250,11 @@ export function planImport(text: string, existing: Job[], closeMissing: boolean,
     if (why.length) asked.set(incoming.length - 1, why)
     if (job) {
       const level = str(pick(r, "level", "seniority")).toLowerCase()
-      Object.assign(incoming[incoming.length - 1], { kind: "job", level: /^(entry|mid)$/.test(level) ? level : "", note: why.join(" · ").slice(0, 400) })
+      const score = Number(str(pick(r, "score", "match")))
+      Object.assign(incoming[incoming.length - 1], {
+        kind: "job", level: /^(entry|mid)$/.test(level) ? level : "", note: why.join(" · ").slice(0, 400),
+        ...(str(pick(r, "score", "match")) && Number.isFinite(score) ? { score: Math.max(0, Math.min(100, Math.round(score))) } : {}),
+      })
     }
     if (/^(no|false|0)$/i.test(str(pick(r, "fit")))) unfit.add(incoming.length - 1)
   })

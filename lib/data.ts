@@ -46,6 +46,8 @@ export interface Job {
   level?: string
   /** Full-time roles: why d3 was unsure about it. */
   note?: string
+  /** Full-time roles: how well it fits, 0-100 (d3's fit probability). */
+  score?: number
 }
 
 /** Why a posting is held back from students, and where it stands with staff. */

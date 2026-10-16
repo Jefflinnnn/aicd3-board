@@ -44,6 +44,7 @@ export const jobSchema = z.object({
   kind: z.literal("job").optional(),
   level: text(20).optional(),
   note: text(400).optional(),
+  score: z.number().int().min(0).max(100).optional(),
 })
 export const reviewSchema = z.object({
   flags: z.array(text(300)).max(30),
@@ -72,7 +73,7 @@ export function toJob(r: Posting): Job {
     ...(r.closed ? { closed: true } : {}),
     ...(r.addedAt ? { addedAt: r.addedAt.getTime() } : {}),
     ...(r.startFrom ? { startFrom: r.startFrom, startTo: r.startTo ?? r.startFrom } : {}),
-    ...(r.kind === "job" ? { kind: "job" as const, level: r.level, note: r.note } : {}),
+    ...(r.kind === "job" ? { kind: "job" as const, level: r.level, note: r.note, ...(r.score != null ? { score: r.score } : {}) } : {}),
   }
 }
 export const toStaged = (r: Posting): StagedJob => ({ ...toJob(r), review: r.review as unknown as ReviewInfo })
@@ -86,7 +87,7 @@ function fields(j: Job) {
     closed: !!j.closed, sample: !!j.sample, addedAt: j.addedAt ? new Date(j.addedAt) : null,
     startFrom: j.startFrom ?? null, startTo: j.startFrom ? (j.startTo ?? j.startFrom) : null,
     // only an import of full-time roles sets these; an edit or an internship import leaves a posting's kind alone
-    ...(j.kind === "job" ? { kind: "job", level: j.level ?? "", note: j.note ?? "" } : {}),
+    ...(j.kind === "job" ? { kind: "job", level: j.level ?? "", note: j.note ?? "", score: j.score ?? null } : {}),
   }
 }
 
