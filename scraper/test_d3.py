@@ -40,6 +40,16 @@ class FakeModel:
         self.asked.append((state, questions))
         if "BOOM" in state:
             raise RuntimeError("CUDA out of memory")
+        if "seniority" in questions:   # full-time roles
+            a = {k: v for k, v in answers().items() if k != "level"}
+            seniority = ({"entry": 0.05, "mid": 0.05, "senior": 0.9} if "decade" in state else
+                         {"entry": 0.2, "mid": 0.3, "senior": 0.5} if "maybe senior" in state else
+                         {"entry": 0.2, "mid": 0.7, "senior": 0.1} if "a few years" in state else
+                         {"entry": 0.8, "mid": 0.15, "senior": 0.05})
+            a["seniority"] = {"type": "choice", "choice": seniority}
+            if "bench" in state:
+                a["computational"] = {"type": "noul", "noul": 0.2}
+            return a
         if "Undergraduates" in state:
             return answers(undergrad=0.9)
         if "Basel" in state:
@@ -54,9 +64,12 @@ class FakeModel:
 class Server:
     """The real d3_server HTTP handler around FakeModel, on a free localhost port."""
 
+    def __init__(self, token=""):
+        self.token = token
+
     def __enter__(self):
         self.model = FakeModel()
-        self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), d3_server.make_handler(self.model))
+        self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), d3_server.make_handler(self.model, self.token))
         self.url = f"http://127.0.0.1:{self.httpd.server_address[1]}"
         threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
         return self
@@ -99,8 +112,38 @@ class ServerEndpoints(unittest.TestCase):
         self.assertEqual(d3_server.jsonable({"a": (Scalar(), 1), 2: None}), {"a": [0.25, 1], "2": None})
 
     def test_only_localhost_without_allow_remote(self):
-        with self.assertRaises(SystemExit):
+        with mock.patch.object(d3_server, "setting", side_effect=lambda n, d="": d), self.assertRaises(SystemExit):
             d3_server.main(["--host", "0.0.0.0"])
+
+    def test_short_token_refused(self):
+        with mock.patch.object(d3_server, "setting", side_effect=lambda n, d="": "short" if n == "D3_TOKEN" else d), \
+                self.assertRaises(SystemExit):
+            d3_server.main(["--host", "0.0.0.0"])
+
+    def test_other_computers_need_the_token(self):
+        token = "k" * 40
+        q = {"fit": {"type": "noul", "instructions": "Fit?"}}
+        with Server(token) as s, mock.patch.object(d3_server, "LOOPBACK", ()):   # treat this test as another computer
+            self.assertEqual(requests.get(s.url + "/health", timeout=5).status_code, 401)
+            self.assertEqual(requests.post(s.url + "/v1/systemone", json={"state": "x", "questions": q}, timeout=5).status_code, 401)
+            bad = {"Authorization": "Bearer " + "x" * 40}
+            self.assertEqual(requests.get(s.url + "/health", headers=bad, timeout=5).status_code, 401)
+            ok = {"Authorization": "Bearer " + token}
+            self.assertEqual(requests.get(s.url + "/health", headers=ok, timeout=5).status_code, 200)
+            # the classifier sends D3_TOKEN from .env.local
+            with mock.patch.object(c, "env", side_effect=lambda n: {"D3_URL": s.url, "D3_TOKEN": token}.get(n, "")):
+                self.assertEqual(c.Classifier("auto", cache_path=None).name, "d3")
+            with mock.patch.object(c, "env", side_effect=lambda n: {"D3_URL": s.url, "D3_TOKEN": "nope"}.get(n, "")):
+                with self.assertRaisesRegex(ConnectionError, "D3_TOKEN"):
+                    c.D3()
+        with Server(token) as s:   # this computer itself needs no token
+            self.assertEqual(requests.get(s.url + "/health", timeout=5).status_code, 200)
+
+    def test_unreachable_remote_d3_says_what_to_check(self):
+        with mock.patch.object(c, "env", side_effect=lambda n: {"D3_URL": "http://192.0.2.1:9"}.get(n, "")), \
+                mock.patch("requests.Session.get", side_effect=requests.exceptions.ConnectTimeout("t")):
+            with self.assertRaisesRegex(ConnectionError, "GPU PC on and awake"):
+                c.D3()
 
 
 class ClassifyThroughServer(unittest.TestCase):
@@ -148,6 +191,48 @@ class ClassifyThroughServer(unittest.TestCase):
         self.assertEqual([r.get("fit") for r in recs], [None, "no", "no", None, "no"])
         self.assertIn("Unsure it's in the US (45% by d3)", recs[3]["review_reason"])
         self.assertEqual(report[0]["us_p"], 0.97)
+
+
+class FullTimeRoles(unittest.TestCase):
+    def classifier(self, s):
+        with mock.patch.object(c, "env", side_effect=lambda n: s.url if n == "D3_URL" else ""):
+            return c.Classifier("auto", cache_path=None, job=True)
+
+    def test_job_questions_and_levels(self):
+        mk = lambda t, d: pi.Posting(company="Genentech", title=t, location="South San Francisco, CA",
+                                     url="https://x/" + t.replace(" ", "_"), description=d)
+        ps = [mk("Data Scientist, Pharmacometrics", "New grads welcome. Build PK/PD models."),
+              mk("Scientist II, Computational Biology", "a few years of omics work"),
+              mk("Scientist, Machine Learning", "a decade leading ML teams"),
+              mk("Statistician", "maybe senior"),
+              mk("Scientist, Process Chemistry", "bench work only")]
+        with Server() as s:
+            clf = self.classifier(s)
+            recs, report = pipeline.build_records(ps, clf, job=True)
+            state, questions = s.model.asked[0]
+        self.assertTrue(state.startswith("Role title: Data Scientist"))
+        self.assertEqual(set(questions), {"computational", "category", "seniority", "us"})
+        self.assertIn("recent graduate", questions["computational"]["instructions"])
+        self.assertEqual([r["decision"] for r in report], ["publish", "publish", "skip", "review", "skip"])
+        self.assertEqual([r.get("level") for r in recs[:2]], ["entry", "mid"])
+        self.assertEqual(recs[0]["term"], "Full-time")
+        self.assertEqual(recs[2]["fit"], "no")
+        self.assertIn("May need more than 5 years (50% by d3)", recs[3]["review_reason"])
+
+    def test_job_answers_are_cached_apart_from_internship_ones(self):
+        with Server() as s:
+            with mock.patch.object(c, "env", side_effect=lambda n: s.url if n == "D3_URL" else ""):
+                intern, job = c.Classifier("auto", cache_path=None), c.Classifier("auto", cache_path=None, job=True)
+            self.assertNotEqual(intern._key("ML", "Amgen", "x", "CA"), job._key("ML", "Amgen", "x", "CA"))
+
+    def test_llm_is_refused_for_jobs(self):
+        with self.assertRaises(ValueError):
+            c.Classifier("llm", cache_path=None, job=True)
+
+    def test_rules_fallback_levels(self):
+        clf = c.Classifier("rules", cache_path=None, job=True)
+        self.assertEqual(clf.classify("Data Scientist", "Amgen", "Requires 3+ years of experience in Python").level, "mid")
+        self.assertEqual(clf.classify("Data Scientist", "Amgen", "PhD with 0-2 years of experience").level, "entry")
 
 
 class EligibilityDecisions(unittest.TestCase):

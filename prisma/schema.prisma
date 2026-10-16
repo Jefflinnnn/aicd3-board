@@ -80,6 +80,8 @@ model AccessGrant {
 
 model Posting {
   id        String       @id
+  /// internship (the job board) or job: a full-time role, shown only to PRIVATE_ROLES_EMAILS (the Full-time roles tab)
+  kind      String       @default("internship")
   state     PostingState @default(live)
   title     String
   /// company id from lib/data.ts COMPANIES
@@ -97,6 +99,10 @@ model Posting {
   /// doesn't say ("10-12 weeks between May and August" is 5 to 7)
   startFrom Int?
   startTo   Int?
+  /// full-time roles: "entry" (0-2 years) or "mid" (2-5 years), as d3 judged it; "" when unsure
+  level     String       @default("")
+  /// full-time roles: why d3 was unsure about it (they never go to the staff review queue)
+  note      String       @default("")
   mode      String       @default("Onsite")
   pay       String       @default("")
   url       String
@@ -121,6 +127,7 @@ model Posting {
   @@index([state])
   @@index([company])
   @@index([company, reqId])
+  @@index([kind, state])
 }
 
 model JobStatus {

@@ -35,6 +35,9 @@ try {
   exit 0   # offline or the site is redeploying: try again in 5 minutes, without filling the log
 }
 if (-not $state.requested -or $state.running) { exit 0 }
+# a refresh may still be busy with its full-time roles part, which the site doesn't see: leave the request waiting
+$held = Get-Content (Join-Path $Root "scraper\out\refresh.lock") -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($held -and (Get-Process -Id ([int]$held) -ErrorAction SilentlyContinue)) { exit 0 }
 
 $claim = Invoke-RestMethod -Uri "$url/api/ingest/request" -Method Post -Headers $headers -ContentType "application/json" `
   -Body '{"action":"claim"}' -TimeoutSec 30

@@ -10,18 +10,25 @@ On Windows, scraper/start_d3_server.ps1 starts it in the background (setup_d3.ps
 when you sign in). The model is loaded once (about 52 GB of GPU memory in bfloat16, a minute or two),
 then every request is answered from memory.
 
-Endpoints (localhost only unless --allow-remote):
+Endpoints (on this computer only, unless D3_HOST / --host says otherwise; see "Other computers" below):
   GET  /health         {"ok": true, "model": ..., "revision": ..., "device": ..., "gpu": ...}
   POST /v1/systemone   {"state": "<text>", "questions": {...}}  ->  {"answers": {...}, "ms": 123}
                        the same arguments as the model card's model.system_one(...). Text only: images and
                        videos aren't accepted, so the server never fetches files or URLs on anyone's behalf.
 
 Settings come from the command line, else the environment, else .env.local at the repository root:
-D3_MODEL, D3_REVISION (pin the model's code to a reviewed commit), D3_PORT.
+D3_MODEL, D3_REVISION (pin the model's code to a reviewed commit), D3_PORT, D3_HOST, D3_TOKEN.
+
+Other computers (your Mac's local copy of the app, say) can use this d3 too: listen on the network with
+D3_HOST=0.0.0.0 and a D3_TOKEN of 32+ characters, which every request from another computer must send as
+"Authorization: Bearer <token>" (requests from this computer itself don't need it). scraper/share_d3.ps1 sets this
+up, opens the port in Windows Firewall for your local network and Tailscale only, and prints what the other
+computer's .env.local needs (D3_URL and D3_TOKEN).
 """
 from __future__ import annotations
 
 import argparse
+import hmac
 import json
 import logging
 import os
@@ -123,9 +130,20 @@ class Model:
             return jsonable(self.model.system_one(state=state, questions=questions)["answers"])
 
 
-def make_handler(model):
+LOOPBACK = ("127.0.0.1", "::1", "::ffff:127.0.0.1")
+MIN_TOKEN = 32
+
+
+def make_handler(model, token: str = ""):
     class Handler(BaseHTTPRequestHandler):
         server_version = "aicd3-d3/1"
+
+        def allowed(self) -> bool:
+            """Requests from this computer always; from another one only with the token (when one is set)."""
+            if self.client_address[0] in LOOPBACK or not token:
+                return True
+            sent = self.headers.get("Authorization", "")
+            return hmac.compare_digest(sent.encode(), f"Bearer {token}".encode())
 
         def send(self, code: int, data: dict) -> None:
             body = json.dumps(data).encode("utf-8")
@@ -138,12 +156,16 @@ def make_handler(model):
         def do_GET(self):
             if self.path.split("?")[0] != "/health":
                 return self.send(404, {"error": "not found"})
+            if not self.allowed():
+                return self.send(401, {"error": "send Authorization: Bearer <D3_TOKEN>"})
             self.send(200, {"ok": True, "model": model.name, "revision": model.revision, "device": model.device,
                             "gpu": model.gpu, "loaded_at": model.loaded_at})
 
         def do_POST(self):
             if self.path.split("?")[0] != "/v1/systemone":
                 return self.send(404, {"error": "not found"})
+            if not self.allowed():
+                return self.send(401, {"error": "send Authorization: Bearer <D3_TOKEN>"})
             try:
                 n = int(self.headers.get("Content-Length") or 0)
             except ValueError:
@@ -172,22 +194,28 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--model", default=setting("D3_MODEL", DEFAULT_MODEL))
     ap.add_argument("--revision", default=setting("D3_REVISION"), help="model commit to load (pins its code)")
-    ap.add_argument("--host", default="127.0.0.1")
+    ap.add_argument("--host", default=setting("D3_HOST", "127.0.0.1"),
+                    help="0.0.0.0 to answer other computers too (needs D3_TOKEN)")
     ap.add_argument("--port", type=int, default=int(setting("D3_PORT", str(DEFAULT_PORT))))
     ap.add_argument("--allow-remote", action="store_true",
                     help="allow --host other than localhost (there's no sign-in: only on a network you trust)")
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
-    if args.host not in ("127.0.0.1", "localhost", "::1") and not args.allow_remote:
-        ap.error("this server has no sign-in, so it only listens on this computer; add --allow-remote to override")
+    token = setting("D3_TOKEN")
+    if token and len(token) < MIN_TOKEN:
+        ap.error(f"D3_TOKEN must be at least {MIN_TOKEN} characters")
+    if args.host not in ("127.0.0.1", "localhost", "::1") and not (token or args.allow_remote):
+        ap.error("to answer other computers, set D3_TOKEN (32+ characters) so they must sign their requests "
+                 "(scraper/share_d3.ps1 does this); --allow-remote listens without one, only on a network you trust")
 
     model = Model(args.model, args.revision or None)
     started = time.monotonic()
     model.ask(SAMPLE, {"fit": {"type": "noul", "instructions": "Is modeling central to this internship?"}})
     log.info("warm-up answer in %.1fs", time.monotonic() - started)
 
-    httpd = ThreadingHTTPServer((args.host, args.port), make_handler(model))
-    log.info("d3 server ready on http://%s:%d (health: /health)", args.host, args.port)
+    httpd = ThreadingHTTPServer((args.host, args.port), make_handler(model, token))
+    log.info("d3 server ready on http://%s:%d (health: /health)%s", args.host, args.port,
+             "; other computers must send D3_TOKEN" if token and args.host not in ("127.0.0.1", "localhost", "::1") else "")
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

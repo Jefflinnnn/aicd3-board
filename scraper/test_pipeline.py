@@ -320,6 +320,34 @@ class Pipeline(unittest.TestCase):
             self.assertTrue(os.path.exists(os.path.join(d, "fit.csv")))
 
 
+    def test_full_time_roles_end_to_end(self):
+        sent = {}
+
+        def fake_post(url, data=None, headers=None, timeout=None):
+            sent.update(url=url, body=json.loads(data))
+            return mock.Mock(status_code=200, json=lambda: {"added": 1, "staged": 0, "updated": 0, "closed": 0,
+                                                            "unchanged": 0, "rejected": 0, "errors": []})
+        mk = lambda t, d: pi.Posting(company="Gilead Sciences", title=t, location="Foster City, CA", url="https://x/" + t[:12],
+                                     description=d)
+        roles = [mk("Data Scientist, Pharmacometrics", "Build population PK/PD models in Python. 3+ years of experience in modeling."),
+                 mk("Scientist, Machine Learning", "Requires 8+ years of industry experience building ML models in Python.")]
+        try:
+            with tempfile.TemporaryDirectory() as d, \
+                    mock.patch.object(pi, "run", return_value=(roles, {"Gilead Sciences": "ok (2)"})), \
+                    mock.patch.object(pipeline.requests, "post", side_effect=fake_post), \
+                    mock.patch.object(c.Classifier, "save"), \
+                    mock.patch.dict(os.environ, {"AICD3_INGEST_TOKEN": "t0k"}):
+                code = pipeline.main(["--kind", "job", "--companies", "Gilead", "--classifier", "rules", "--out", d,
+                                      "--url", "http://localhost:3000"])
+                self.assertEqual(pi.MODE, "job")
+        finally:
+            pi.set_mode("internship")
+        self.assertEqual(code, 0)
+        self.assertEqual(sent["url"], "http://localhost:3000/api/ingest?dryRun=0&closeMissing=1&reviewAll=0&kind=job")
+        self.assertEqual([r["title"] for r in sent["body"]["postings"]], ["Data Scientist, Pharmacometrics"])  # 8+ years left out
+        self.assertEqual((sent["body"]["postings"][0]["level"], sent["body"]["postings"][0]["term"]), ("mid", "Full-time"))
+
+
 class RequireD3(unittest.TestCase):
     """The GPU PC's scheduled refresh (--require-d3): only d3 decides."""
     postings = Pipeline.postings

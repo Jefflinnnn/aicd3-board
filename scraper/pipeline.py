@@ -81,12 +81,16 @@ def route_of(v, require_d3: bool = False) -> str:
 
 
 def build_records(postings: list[pi.Posting], clf: Classifier, on_progress=None,
-                  require_d3: bool = False, on_routing=None) -> tuple[list[dict], list[dict]]:
+                  require_d3: bool = False, on_routing=None, job: bool = False) -> tuple[list[dict], list[dict]]:
     """Import records for the app, and one report row per posting. With require_d3, a posting d3 couldn't answer
     for (it fell back to keyword rules) is neither published nor taken off the board on the rules' say-so: it goes to
-    the review queue instead."""
+    the review queue instead.
+
+    job: full-time roles. There's no undergraduate check, and each record carries its level (entry or mid); one d3
+    was unsure about keeps a review_reason, which the app shows as a note on the private tab (no review queue)."""
     records, report = [], []
-    items = [(p.title, p.company, p.description, where(p)) for p in postings if not pi.undergrad_only(p.title, p.description)]
+    student_only = (lambda p: False) if job else (lambda p: pi.undergrad_only(p.title, p.description))
+    items = [(p.title, p.company, p.description, where(p)) for p in postings if not student_only(p)]
     # live routing for the Admin page: postings answered on an earlier run are counted straight away, the rest as
     # the model answers them
     tally = {"publish": 0, "review": 0, "skip": 0, "undergrad": len(postings) - len(items), "not_us": 0}
@@ -115,7 +119,7 @@ def build_records(postings: list[pi.Posting], clf: Classifier, on_progress=None,
     # the model classifies the new or changed ones first (Claude several at a time); the loop below reads its cache
     clf.warm(items, on_progress=on_progress, on_verdict=answered)
     for p in postings:
-        if pi.undergrad_only(p.title, p.description):
+        if student_only(p):
             # UCSF students are graduate and professional students: undergraduate-only roles and co-ops are
             # left out (and moved to the bin if an earlier run published them), without asking the classifier
             report.append({"decision": "undergrad", "computational": "", "category": "", "category_p": "",
@@ -138,6 +142,8 @@ def build_records(postings: list[pi.Posting], clf: Classifier, on_progress=None,
                        "title": p.title, "url": p.url, "note": v.note})
         rec = pi.to_import_record(p)
         rec["category"] = v.category
+        if job:
+            rec.update(term="Full-time", start_from=None, start_to=None, level=v.level)
         # Claude's own reading of the posting, when it wrote one (better than heading-matching on odd formats)
         if v.summary:
             rec["description"] = v.summary
@@ -160,8 +166,8 @@ def build_records(postings: list[pi.Posting], clf: Classifier, on_progress=None,
     return records, report
 
 
-def ingest(url: str, token: str, records: list[dict], dry_run: bool) -> dict:
-    qs = f"?dryRun={int(dry_run)}&closeMissing=1&reviewAll=0"
+def ingest(url: str, token: str, records: list[dict], dry_run: bool, kind: str = "internship") -> dict:
+    qs = f"?dryRun={int(dry_run)}&closeMissing=1&reviewAll=0" + ("&kind=job" if kind == "job" else "")
     body = json.dumps({"postings": records}, ensure_ascii=False).encode("utf-8")
     print(f"POST {url.rstrip('/')}/api/ingest{qs}  ({len(body) / 1e6:.1f} MB)", flush=True)
     started = time.monotonic()
@@ -324,7 +330,17 @@ def _main(argv: list[str] | None = None) -> int:
                          "stops answering partway, and send postings it couldn't classify to the review queue")
     ap.add_argument("--trigger", choices=["manual", "schedule"], default="manual",
                     help="how the Admin page labels this run (the daily scheduled task passes schedule)")
+    ap.add_argument("--kind", choices=["internship", "job"], default="internship",
+                    help="job: junior to mid-level (0-5 years) full-time roles at the same companies, for the private "
+                         "Full-time roles tab. Not shown on the Admin page's refresh picture, and open roles aren't "
+                         "re-checked (a role that's gone is closed when the next run doesn't find it)")
     args = ap.parse_args(argv)
+    job = args.kind == "job"
+    pi.set_mode(args.kind)
+    if job:
+        args.no_check = True
+        if args.out == os.path.join(ROOT, "scraper", "out", "pipeline"):
+            args.out = os.path.join(ROOT, "scraper", "out", "pipeline-roles")
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
 
     token = read_env(("AICD3_INGEST_TOKEN", "SCRAPER_INGEST_TOKEN"))
@@ -341,6 +357,8 @@ def _main(argv: list[str] | None = None) -> int:
 
     # live progress for the Admin page (the refresh Sankey); also refuses to start beside another refresh
     prog = live.from_env(args.url, token, names, trigger=args.trigger, dry_run=args.dry_run)
+    if job:
+        prog.enabled = False   # the Admin page's live picture is the internship refresh's
     try:
         prog.start()
     except live.AlreadyRunning as e:
@@ -363,14 +381,21 @@ def _main(argv: list[str] | None = None) -> int:
     _stop_if_asked(prog)
     step("2/4 classify", f"{len(postings)} postings")
     prog.step("classify")
-    clf = Classifier("d3" if args.require_d3 else args.classifier)
+    clf = Classifier("d3" if args.require_d3 else args.classifier, job=job)
     prog.classifier(clf.name)
     print(f"classifier: {clf.name}", flush=True)
     if clf.fallback_reason:
         print(f"[warning] {clf.fallback_reason}", flush=True)
     if args.require_d3 and clf.name != "d3":
         raise SystemExit(f"d3 isn't answering, and this run only lets d3 decide, so nothing was imported: {clf.fallback_reason}")
-    records, report = build_records(postings, clf, on_progress=prog.classify, require_d3=args.require_d3, on_routing=prog.routing)
+    if job:
+        # roles asking for 6+ years on every route are left out before d3 sees them
+        kept = [p for p in postings if (pi.min_years(p.description) or 0) < 6]
+        if len(kept) < len(postings):
+            print(f"{len(postings) - len(kept)} role(s) left out for asking for 6+ years of experience", flush=True)
+        postings = kept
+    records, report = build_records(postings, clf, on_progress=prog.classify, require_d3=args.require_d3,
+                                    on_routing=prog.routing, job=job)
     prog.classify(len(postings), len(postings))
     clf.save()
     if args.require_d3 and clf.d3_failures >= 5:
@@ -394,12 +419,12 @@ def _main(argv: list[str] | None = None) -> int:
     prog.outcome(counts)
     step("3/4 import", f"{len(records)} records to {args.url}{' (dry run)' if args.dry_run else ''}")
     prog.step("import")
-    data = ingest(args.url, token, records, args.dry_run)
+    data = ingest(args.url, token, records, args.dry_run, args.kind)
 
     print(f"\n{datetime.now():%Y-%m-%d %H:%M}  classifier: {clf.name}")
     for name, s in status.items():
         print(f"  {name:<24} {s}")
-    print(f"\n{len(postings)} US internships scraped: {counts['publish']} computational, {counts['review']} unsure "
+    print(f"\n{len(postings)} US {'full-time roles' if job else 'internships'} scraped: {counts['publish']} computational, {counts['review']} unsure "
           f"(to review), {counts['skip']} left out as not a fit for AICD3, "
           f"{counts['undergrad']} left out as undergraduate-only, {counts['not_us']} left out as outside the US (see fit.csv)")
     print(("Dry run, nothing saved: " if args.dry_run else "Database: ") +

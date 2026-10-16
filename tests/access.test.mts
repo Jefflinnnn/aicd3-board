@@ -27,6 +27,7 @@ process.env.SCRAPER_INGEST_TOKEN = "t".repeat(48)
   const fake = `${os.tmpdir()}/aicd3-fake-python.sh`
   fs.writeFileSync(fake, `#!/bin/sh
 if [ "$1" = "-c" ]; then exit 0; fi
+if [ -n "$FAKE_ARGS" ]; then echo "$@" > "$FAKE_ARGS"; fi
 while [ $# -gt 0 ]; do if [ "$1" = "--summary-json" ]; then out="$2"; fi; shift; done
 echo "scraping Gilead Sciences"
 sleep \${FAKE_SLEEP:-0}
@@ -491,6 +492,154 @@ describe("pipeline imports", () => {
   })
 })
 
+describe("rejected postings stay rejected", () => {
+  const post = (body: unknown) => ingest(new Request("http://localhost/api/ingest?reviewAll=0&closeMissing=1", { method: "POST", body: JSON.stringify(body), headers: { authorization: "Bearer " + process.env.SCRAPER_INGEST_TOKEN } }))
+  const rec = (extra: Record<string, unknown> = {}) => ({
+    company: "gilead", title: "Intern - Data Analytics", category: "other", first_seen: "2026-09-08", locations: ["Foster City, CA"],
+    url: "https://gilead.wd1.myworkdayjobs.com/gileadcareers/job/Foster-City/Intern-Data-Analytics_R0054650", req_id: "R0054650",
+    description: "z".repeat(120), responsibilities: ["Build dashboards"], qualifications: ["Excel"],
+    review_reason: "Unsure it has computational work (48% by d3)", ...extra,
+  })
+  before(async () => {
+    await wipe()
+    await prisma.profile.create({ data: { id: staff.id, email: staff.email, emailVerified: true, role: "staff", status: "active" } })
+    await post({ postings: [rec()] })
+    as(staff)
+    const r = await A.loadState()
+    if (r.mode !== "cloud") throw new Error("staff should be active")
+    await A.setReviewStatus(r.staff!.staged.map((x) => x.id), "rejected")
+  })
+  const queue = () => prisma.posting.count({ where: { state: "review" } })
+
+  it("the same posting in the next run stays rejected, even when d3 now wants it published", async () => {
+    const out = await (await post({ postings: [rec(), ] })).json()
+    assert.deepEqual([out.rejected, out.staged, out.added], [1, 0, 0])
+    const again = await (await post({ postings: [rec({ review_reason: undefined, category: "development" })] })).json()
+    assert.deepEqual([again.rejected, again.staged, again.added], [1, 0, 0])
+  })
+
+  it("stays rejected when the site lists it with another job ID, link or route", async () => {
+    // no job ID (its detail page didn't load) and a locale in the link
+    let out = await (await post({ postings: [rec({ req_id: "", url: "https://gilead.wd5.myworkdayjobs.com/en-US/gileadcareers/job/Foster-City/Intern-Data-Analytics_R0054650" })] })).json()
+    assert.deepEqual([out.rejected, out.staged, out.added], [1, 0, 0])
+    // the same link with a job ID in another format
+    out = await (await post({ postings: [rec({ req_id: "R0054650-1" })] })).json()
+    assert.deepEqual([out.rejected, out.staged, out.added], [1, 0, 0])
+    // another route: new link and ID, same title and location; remembered from now on
+    out = await (await post({ postings: [rec({ req_id: "jid-998877", url: "https://careers.gilead.com/jobs/998877" })] })).json()
+    assert.deepEqual([out.rejected, out.staged, out.added], [1, 0, 0])
+    const row = await prisma.posting.findFirst({ where: { state: "rejected" } })
+    assert.ok((row?.review as { seen?: string[] }).seen?.includes("r:gilead:jid-998877"))
+    // ...so a later retitle on that route is still recognised by its ID
+    out = await (await post({ postings: [rec({ req_id: "jid-998877", url: "https://careers.gilead.com/jobs/998877", title: "Intern - Data Analytics (Summer 2027)" })] })).json()
+    assert.deepEqual([out.rejected, out.staged, out.added], [1, 0, 0])
+    assert.equal(await queue(), 0)
+    assert.equal(await prisma.posting.count(), 1)
+  })
+
+  it("a different posting at the same company still comes in for review", async () => {
+    const out = await (await post({ postings: [rec({ title: "Intern - Data Engineering", req_id: "R0054700", url: "https://gilead.wd1.myworkdayjobs.com/gileadcareers/job/x/R0054700" })] })).json()
+    assert.equal(out.staged, 1)
+    assert.equal(out.rejected, 0)
+  })
+})
+
+describe("private full-time roles", () => {
+  const jeff = user("u-jeff", "jeff.lin@ucsf.edu")
+  const token = () => process.env.SCRAPER_INGEST_TOKEN!
+  const post = (body: unknown, qs: string) =>
+    ingest(new Request("http://localhost/api/ingest" + qs, { method: "POST", body: JSON.stringify(body), headers: { authorization: "Bearer " + token() } }))
+  const role = (title: string, extra: Record<string, unknown> = {}) => ({
+    company: "gilead", title, category: "development", first_seen: "2026-10-01", locations: ["Foster City, CA"], term: "Full-time",
+    url: "https://gilead.wd1.myworkdayjobs.com/gileadcareers/job/r/" + encodeURIComponent(title), description: "z".repeat(120),
+    responsibilities: ["Build PK/PD models"], qualifications: ["PhD"], ...extra,
+  })
+  before(async () => {
+    await wipe()
+    process.env.SIGN_IN_EMAIL_DOMAINS += ",ucsf.edu"
+    await prisma.profile.create({ data: { id: jeff.id, email: jeff.email, emailVerified: true, role: "student", status: "active" } })
+    await prisma.profile.create({ data: { id: staff.id, email: staff.email, emailVerified: true, role: "staff", status: "active" } })
+    await prisma.profile.create({ data: { id: admin.id, email: admin.email, emailVerified: true, role: "admin", status: "active" } })
+    await prisma.profile.create({ data: { id: alice.id, email: alice.email, emailVerified: true, role: "student", status: "active" } })
+    as(staff)
+    await A.saveJobs([job("intern1", { company: "gilead", url: "https://gilead.example/intern1" })])
+  })
+
+  it("an import of roles goes straight to the private tab, never to the review queue, and leaves internships alone", async () => {
+    const out = await (await post({ postings: [
+      role("Data Scientist, Pharmacometrics", { req_id: "R1", level: "entry" }),
+      role("Scientist II, Computational Biology", { req_id: "R2", level: "mid", review_reason: "May need more than 5 years (45% by d3)" }),
+    ] }, "?reviewAll=1&closeMissing=1&kind=job")).json()
+    assert.equal(out.added, 2)
+    assert.equal(out.staged, 0)
+    assert.equal(out.closed, 0)   // the internship from the same company isn't touched
+    const rows = await prisma.posting.findMany({ where: { kind: "job" }, orderBy: { reqId: "asc" } })
+    assert.deepEqual(rows.map((r) => [r.state, r.level]), [["live", "entry"], ["live", "mid"]])
+    assert.match(rows[1].note, /May need more than 5 years/)
+    assert.equal((await prisma.posting.findUnique({ where: { id: "intern1" } }))?.closed, false)
+    // and an internship run never closes roles
+    await post({ postings: [{ ...role("Intern - Biostatistics", { req_id: "I9" }), term: "Summer 2027" }] }, "?reviewAll=0&closeMissing=1")
+    assert.equal(await prisma.posting.count({ where: { kind: "job", closed: true } }), 0)
+    assert.equal((await prisma.posting.findUnique({ where: { id: "intern1" } }))?.closed, true)
+  })
+
+  it("only jeff.lin@ucsf.edu can load them; staff, admins and students can't", async () => {
+    as(jeff)
+    const r = await A.loadState()
+    if (r.mode !== "cloud") return assert.fail("jeff should be active")
+    assert.equal(r.me.roles, true)
+    assert.ok(r.jobs.every((j) => !j.kind))   // the board itself has internships only
+    const { roles } = await A.loadRoles()
+    assert.equal(roles.length, 2)
+    assert.ok(roles.every((x) => x.kind === "job"))
+    for (const u of [staff, admin, alice]) {
+      as(u)
+      const s = await A.loadState()
+      if (s.mode !== "cloud") return assert.fail()
+      assert.equal(s.me.roles, undefined)
+      assert.ok(s.jobs.every((j) => !j.kind))
+      assert.equal(s.staff?.bin.length ?? 0, 0)
+      assert.ok((s.staff?.staged ?? []).every((x) => !x.kind))
+      await assert.rejects(A.loadRoles(), /forbidden/)
+    }
+  })
+
+  it("an unverified jeff.lin@ucsf.edu gets nothing", async () => {
+    await prisma.profile.update({ where: { id: jeff.id }, data: { emailVerified: false } })
+    as({ ...jeff, emailVerified: false })
+    await assert.rejects(A.loadRoles())
+    await prisma.profile.update({ where: { id: jeff.id }, data: { emailVerified: true } })
+  })
+
+  it("only Jeff can save a role; staff actions can't touch one", async () => {
+    const r1 = (await prisma.posting.findFirst({ where: { reqId: "R1" } }))!
+    as(jeff)
+    await A.setStatus([r1.id], "saved")
+    await A.setNote(r1.id, "apply by Friday")
+    assert.equal(await prisma.jobStatus.count({ where: { postingId: r1.id, userId: jeff.id } }), 1)
+    as(alice)
+    await A.setStatus([r1.id], "saved")
+    assert.equal(await prisma.jobStatus.count({ where: { postingId: r1.id, userId: alice.id } }), 0)
+    as(staff)
+    await A.moveToBin([r1.id])
+    await A.pullToReview([r1.id], "x")
+    await A.saveJobs([{ ...job(r1.id), title: "Renamed by staff" } as never])
+    const after_ = await prisma.posting.findUnique({ where: { id: r1.id } })
+    assert.equal(after_?.state, "live")
+    assert.equal(after_?.title, "Data Scientist, Pharmacometrics")
+  })
+
+  it("the open-posting check never sees roles", async () => {
+    const res = await openRoute.GET(new Request("http://localhost/api/ingest/open", { headers: { authorization: "Bearer " + token() } }))
+    const { postings } = await res.json()
+    assert.ok(postings.every((p: { reqId: string }) => !["R1", "R2"].includes(p.reqId)))
+  })
+
+  it("rejects an unknown kind", async () => {
+    assert.equal((await post({ postings: [] }, "?kind=contract")).status, 400)
+  })
+})
+
 describe("job data refresh", () => {
   before(wipe)
   const settle = async () => {
@@ -591,6 +740,45 @@ describe("job data refresh", () => {
     } finally {
       fs.rmSync(".venv-d3", { recursive: true, force: true })
     }
+  })
+
+  it("with d3 on the GPU PC (D3_URL + D3_TOKEN), checks it with the token and refreshes only with d3", async () => {
+    const http = await import("node:http")
+    const os = await import("node:os")
+    const fs = await import("node:fs")
+    const token = "k".repeat(40)
+    const srv = http.createServer((req, res) => {
+      const ok = req.headers.authorization === `Bearer ${token}`
+      res.writeHead(ok ? 200 : 401, { "content-type": "application/json" })
+      res.end(JSON.stringify(ok ? { ok: true, model: "vllm-sr/d3", gpu: "RTX PRO 6000" } : { error: "token" }))
+    })
+    await new Promise<void>((r) => srv.listen(0, "0.0.0.0", () => r()))
+    const port = (srv.address() as { port: number }).port
+    const argsFile = `${os.tmpdir()}/aicd3-fake-args-${port}.txt`
+    process.env.D3_URL = `http://0.0.0.0:${port}`   // not this computer's loopback name: counts as another computer
+    process.env.FAKE_ARGS = argsFile
+    process.env.FAKE_SLEEP = "0"
+    try {
+      as(admin)
+      process.env.D3_TOKEN = "wrong".repeat(8)
+      let st = await R.getRefreshStatus()
+      assert.equal(st.classifier.server.up, false)
+      assert.match(st.classifier.server.detail, /refused D3_TOKEN/)
+      process.env.D3_TOKEN = token
+      st = await R.getRefreshStatus()
+      assert.deepEqual([st.classifier.d3, st.classifier.remote, st.classifier.server.up], [true, true, true])
+      assert.match(st.classifier.canSetup ?? "", /GPU PC/)   // nothing to set up on this computer
+      await R.refreshNow()
+      await settle()
+      assert.match(fs.readFileSync(argsFile, "utf8"), /--require-d3/)
+    } finally {
+      delete process.env.D3_URL
+      delete process.env.D3_TOKEN
+      delete process.env.FAKE_ARGS
+      srv.close()
+    }
+    await R.refreshNow()   // and without D3_URL, a local refresh may still fall back to rules
+    await settle()
   })
 
   it("marks a run whose process died as failed, and says when this server can't run it", async () => {

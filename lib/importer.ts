@@ -22,6 +22,9 @@ export interface ImportPlan {
   restage: StagedJob[]
   /** rows matching postings staff already rejected; left alone */
   rejected: number
+  /** rejected postings this import recognised under a new job ID, link or title: saved with that identifier too,
+   *  so the rejection holds whichever way the site lists it next time (still rejected, nothing else changes) */
+  remember: StagedJob[]
   /** with closeMissing: import-flagged postings still waiting for review that this import no longer
    *  contains (gone from the site, or no longer a fit); taken out of the queue */
   dropStale: StagedJob[]
@@ -100,8 +103,8 @@ function day(v: unknown): string | null {
 }
 
 const sameish = (a: Job, b: Job) =>
-  JSON.stringify([a.title, a.company, jobLocations(a), a.category, a.deadline, a.term, a.mode, a.pay, a.url, a.reqId || "", a.summary, a.resp, a.quals, !!a.closed, a.startFrom ?? 0, a.startTo ?? 0]) ===
-  JSON.stringify([b.title, b.company, jobLocations(b), b.category, b.deadline, b.term, b.mode, b.pay, b.url, b.reqId || "", b.summary, b.resp, b.quals, !!b.closed, b.startFrom ?? 0, b.startTo ?? 0])
+  JSON.stringify([a.title, a.company, jobLocations(a), a.category, a.deadline, a.term, a.mode, a.pay, a.url, a.reqId || "", a.summary, a.resp, a.quals, !!a.closed, a.startFrom ?? 0, a.startTo ?? 0, a.level || "", a.note || ""]) ===
+  JSON.stringify([b.title, b.company, jobLocations(b), b.category, b.deadline, b.term, b.mode, b.pay, b.url, b.reqId || "", b.summary, b.resp, b.quals, !!b.closed, b.startFrom ?? 0, b.startTo ?? 0, b.level || "", b.note || ""])
 
 const MONTHS3 = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
 /** a month 1-12 from 5, "5", "May" or "may"; undefined when blank or unreadable */
@@ -122,6 +125,35 @@ function canonUrl(u: string): string {
   } catch {
     return u.trim().toLowerCase()
   }
+}
+
+const normTitle = (t: string) => t.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim()
+/** a link compared loosely: also without a locale segment (/en-US/) or Workday's data-centre number (wd1, wd5...) */
+const looseUrl = (u: string) => canonUrl(u).replace(/\/[a-z]{2}-[a-z]{2}(?=\/)/g, "").replace(/\.wd\d+\./, ".wd.")
+
+/**
+ * Every way a rejected posting can be recognised again: its job ID, its link (loosely), or the same title at the
+ * same company and locations. Sites list one posting differently from run to run (a job ID only when its detail page
+ * loaded, another route's link or ID format, a locale in the link), and any one of these is enough to keep it rejected.
+ */
+export function memoryKeys(j: Job): string[] {
+  const keys: string[] = []
+  const req = (j.reqId || "").trim().toLowerCase()
+  if (req) keys.push(`r:${j.company}:${req}`)
+  if (j.url && j.url !== coById(j.company).site) keys.push("u:" + looseUrl(j.url))
+  const t = normTitle(j.title)
+  if (t) keys.push(`t:${j.company}:${t}|${jobLocations(j).map((l) => l.toLowerCase()).sort().join(";")}`)
+  return keys
+}
+
+/** Postings staff rejected, found by any key in memoryKeys or remembered from earlier imports (review.seen). */
+function rejectedMemory(staged: StagedJob[]) {
+  const byKey = new Map<string, StagedJob>()
+  for (const s of staged) {
+    if (s.review.status !== "rejected") continue
+    for (const k of [...memoryKeys(s), ...(s.review.seen || [])]) if (!byKey.has(k)) byKey.set(k, s)
+  }
+  return { find: (n: Job) => memoryKeys(n).map((k) => byKey.get(k)).find(Boolean) }
 }
 
 /**
@@ -156,7 +188,11 @@ function matcher<T extends Job>(list: T[]) {
   }
 }
 
-export function planImport(text: string, existing: Job[], closeMissing: boolean, staged: StagedJob[] = [], reviewAll = false): ImportPlan {
+/**
+ * `job`: an import of full-time roles (the private Full-time roles tab). Nothing goes to the review queue and the
+ * internship checks don't apply; the scraper's own doubts (review_reason) become the role's note instead.
+ */
+export function planImport(text: string, existing: Job[], closeMissing: boolean, staged: StagedJob[] = [], reviewAll = false, job = false): ImportPlan {
   const recs = readRecords(text)
   const errors: ImportRowError[] = []
   const now = Date.now()
@@ -212,11 +248,27 @@ export function planImport(text: string, existing: Job[], closeMissing: boolean,
     if (!catHit) catMiss.add(incoming.length - 1)
     const why = list(pick(r, "review_reason", "review", "flags"), /\|/).map((x) => x.slice(0, 300)).slice(0, 5)
     if (why.length) asked.set(incoming.length - 1, why)
+    if (job) {
+      const level = str(pick(r, "level", "seniority")).toLowerCase()
+      Object.assign(incoming[incoming.length - 1], { kind: "job", level: /^(entry|mid)$/.test(level) ? level : "", note: why.join(" · ").slice(0, 400) })
+    }
     if (/^(no|false|0)$/i.test(str(pick(r, "fit")))) unfit.add(incoming.length - 1)
   })
 
   const live = matcher(existing)
   const held_ = matcher(staged)
+  const turnedDown = rejectedMemory(staged)
+  const remember = new Map<string, StagedJob>()
+  /** this row matched a rejected posting: count it, and keep any new way of recognising it */
+  const stillRejected = (r: StagedJob, n: Job) => {
+    rejected++
+    const known = new Set([...memoryKeys(r), ...(remember.get(r.id) ?? r).review.seen || []])
+    const fresh = memoryKeys(n).filter((k) => !known.has(k))
+    if (fresh.length) {
+      const cur = remember.get(r.id) ?? r
+      remember.set(r.id, { ...cur, review: { ...cur.review, seen: [...(cur.review.seen || []), ...fresh].slice(-30) } })
+    }
+  }
   const heldSeen = new Set<string>()
   const matched = new Set<string>() // existing postings this import saw
   const add: Job[] = []
@@ -244,20 +296,24 @@ export function planImport(text: string, existing: Job[], closeMissing: boolean,
       if (matched.has(old.id)) return errors.push({ row: i + 1, reason: "Matches the same posting as an earlier row in this import." })
       matched.add(old.id)
     }
-    const held = !old && held_.find(n)
+    const held = !job && !old && held_.find(n)
     if (held) heldSeen.add(held.id)
     if (held) {
       // already in the review queue: keep it there (or keep it rejected), refreshing its details
-      if (held.review.status === "rejected") return void rejected++
+      if (held.review.status === "rejected") return void stillRejected(held, n)
       const merged: StagedJob = { ...held, ...n, id: held.id, posted: held.posted, addedAt: held.addedAt, sample: false, review: { ...held.review, flags: [...reviewFlags(n, { catUnmatched: catMiss.has(i) }), ...(asked.get(i) || [])] } }
       if (sameish(held, merged)) unchanged++
       else restage.push(merged)
       return
     }
+    // not found exactly, but staff rejected this posting under another job ID, link or listing: it stays rejected
+    const gone = !job && !old && turnedDown.find(n)
+    if (gone) return void stillRejected(gone, n)
     if (!old) {
       const fresh = { ...n, id: "j" + now.toString(36) + i.toString(36) }
       const flags = [...reviewFlags(fresh, { catUnmatched: catMiss.has(i) }), ...(asked.get(i) || [])]
-      if (flags.length || reviewAll) stage.push(toStage(fresh, flags.length ? flags : ["Every new posting in this import was sent for review"], "import"))
+      if (job) add.push(fresh)
+      else if (flags.length || reviewAll) stage.push(toStage(fresh, flags.length ? flags : ["Every new posting in this import was sent for review"], "import"))
       else add.push(fresh)
     } else {
       const merged: Job = { ...old, ...n, id: old.id, posted: old.posted, addedAt: old.addedAt, sample: false }
@@ -269,8 +325,8 @@ export function planImport(text: string, existing: Job[], closeMissing: boolean,
   const close = closeMissing
     ? existing.filter((j) => companies.includes(j.company) && !j.closed && !matched.has(j.id) && (j.deadline ? j.deadline > iso(TODAY) : true)).map((j) => ({ ...j, closed: true }))
     : []
-  const dropStale = closeMissing
+  const dropStale = closeMissing && !job
     ? staged.filter((s) => s.review.source === "import" && s.review.status === "pending" && companies.includes(s.company) && !heldSeen.has(s.id))
     : []
-  return { add, update, unchanged, close, stage, restage, rejected, errors, companies, dropStale, unlist }
+  return { add, update, unchanged, close, stage, restage, rejected, remember: [...remember.values()], errors, companies, dropStale, unlist }
 }

@@ -74,6 +74,10 @@ UNDERGRAD_REVIEW = 0.4  # between this and UNDERGRAD_SKIP: staff decide
 US_SKIP = 0.3          # below: left out
 US_REVIEW = 0.6        # between US_SKIP and this: staff decide
 QUESTIONS_V = 4  # bump when the questions or rules change, so cached answers aren't reused
+JOB_QUESTIONS_V = 1  # the same, for the full-time roles questions
+# seniority thresholds for full-time roles (d3): P(needs more than 5 years)
+SENIOR_SKIP = 0.6     # at or above: left out
+SENIOR_REVIEW = 0.4   # between this and SENIOR_SKIP: listed, with a note
 
 CATEGORIES = {
     "discovery": "Drug discovery, before clinical trials: target identification and validation, screening, "
@@ -109,6 +113,28 @@ LEVELS = {
                 "says any university student, or doesn't limit who can apply.",
     "undergrad_only": "Only undergraduate (bachelor's), community-college or high-school students can apply.",
 }
+# Full-time roles (pipeline.py --kind job): the same fit test, for a recent graduate instead of a student
+JOB_COMPUTATIONAL_Q = (
+    "Is this full-time role a good fit for a recent graduate of UCSF's master's program in Artificial Intelligence "
+    "and Computational Drug Discovery and Development (AICD3), because machine learning, AI or computational "
+    "work is central to it: building or applying ML or AI models, computational chemistry or "
+    "cheminformatics, structural biology or protein design, bioinformatics and omics, modeling and "
+    "simulation (for example pharmacometrics, PK/PD or QSP), clinical or real-world data science, biostatistics "
+    "or statistical programming, or writing software that automates scientific or data workflows? "
+    "Answer no when the computational part is only spreadsheets, dashboards, reporting or IT support, or when "
+    "the role is mainly lab bench work, manufacturing, clinical operations, sales, marketing, finance, HR or "
+    "communications."
+)
+JOB_CATEGORY_Q = "Which part of the pharmaceutical pipeline does this role belong to?"
+SENIORITY_Q = "How much professional experience does this role ask for, counting the most lenient route it offers (for example a PhD with fewer years)?"
+SENIORITY = {
+    "entry": "Entry level: new graduates or up to about 2 years of experience (for example Associate Scientist, "
+             "Scientist I, Data Scientist I, Postdoctoral Fellow).",
+    "mid": "Mid level: about 2 to 5 years of experience (for example Scientist II or III, Data Scientist II).",
+    "senior": "Senior: more than 5 years, or a senior, principal, staff, lead, manager, director or higher role.",
+}
+JOB_US_Q = ("Is this role based in the United States, or remote from within the United States? "
+            "Answer yes when at least one of its locations is in the US.")
 US_Q = ("Is this internship based in the United States, or remote from within the United States? "
         "Answer yes when at least one of its locations is in the US.")
 
@@ -127,6 +153,13 @@ class Verdict:
     # eligibility, asked of d3 only (-1: not asked; the scraper's keyword checks still apply)
     undergrad: float = -1.0   # probability it's open to undergraduates only
     us: float = -1.0          # probability it's in the US
+    # full-time roles only (-1 / "": not asked)
+    senior: float = -1.0      # probability it needs more than 5 years
+    level: str = ""           # entry | mid, the likelier of the two
+
+    @property
+    def too_senior(self) -> bool:
+        return self.senior >= SENIOR_SKIP
 
     @property
     def decision(self) -> str:
@@ -136,7 +169,7 @@ class Verdict:
         can add tech). Review: the borderline ones inside the drug pipeline, ML-centred roles filed under
         other, and any that would be published but whose eligibility is unclear. Everything else is left
         out, so the review queue stays short."""
-        if self.undergrad >= UNDERGRAD_SKIP or 0 <= self.us < US_SKIP:
+        if self.undergrad >= UNDERGRAD_SKIP or 0 <= self.us < US_SKIP or self.too_senior:
             return "skip"
         if self.computational >= FIT_MIN:
             base = "publish" if self.category in (*PIPELINE, "tech") else "review"
@@ -152,6 +185,8 @@ class Verdict:
             out.append(f"Unsure graduate students can apply ({round(self.undergrad * 100)}% undergraduate-only by {self.backend})")
         if 0 <= self.us < US_REVIEW:
             out.append(f"Unsure it's in the US ({round(self.us * 100)}% by {self.backend})")
+        if self.senior >= SENIOR_REVIEW:
+            out.append(f"May need more than 5 years ({round(self.senior * 100)}% by {self.backend})")
         return out
 
     @property
@@ -160,6 +195,8 @@ class Verdict:
             return "undergraduate only"
         if 0 <= self.us < US_SKIP:
             return "not in the US"
+        if self.too_senior:
+            return "too senior"
         return "not a fit"
 
     def review_reason(self) -> str:
@@ -176,9 +213,10 @@ class Verdict:
         return text
 
 
-def posting_text(title: str, company: str, description: str, location: str = "") -> str:
+def posting_text(title: str, company: str, description: str, location: str = "", job: bool = False) -> str:
     where = f"\nLocation: {location}" if location else ""
-    return f"Internship title: {title}\nCompany: {company}{where}\n\n{(description or '').strip()[:TEXT_LIMIT]}"
+    head = "Role title" if job else "Internship title"
+    return f"{head}: {title}\nCompany: {company}{where}\n\n{(description or '').strip()[:TEXT_LIMIT]}"
 
 
 # --------------------------------------------------------------------------------------
@@ -238,6 +276,16 @@ def settle_category(v: Verdict, title: str) -> Verdict:
     if v.category == "tech" and stage:
         v.category = stage
         v.note = (v.note + "; " if v.note else "") + f"filed under {stage}: the title names a drug-pipeline area"
+    return v
+
+
+def rules_job_level(v: Verdict, description: str) -> Verdict:
+    """Full-time roles without d3: the level from the years a posting asks for (the scraper already left out
+    senior titles and roles asking for 6+ years)."""
+    import pharma_internships as pi
+    yrs = pi.min_years(description)
+    v.level = "mid" if yrs is not None and yrs > 2 else "entry" if yrs is not None else ""
+    v.senior = 0.0 if yrs is None or yrs <= 5 else 1.0
     return v
 
 
@@ -329,19 +377,29 @@ class D3:
     """vllm-sr/d3, asked over HTTP: the model runs in scraper/d3_server.py on this computer's GPU.
     Construction checks the server answers, so an unreachable server is noticed once, before classifying."""
 
-    def __init__(self, url: str | None = None, session=None, timeout: float = 120.0):
+    def __init__(self, url: str | None = None, session=None, timeout: float = 120.0, job: bool = False):
         import requests
+        self.job = job
         self.url = (url or env("D3_URL") or D3_URL_DEFAULT).rstrip("/")
         self.http = session or requests.Session()
         self.timeout = timeout
+        token = env("D3_TOKEN")
+        if token:   # d3 on another computer (the GPU PC, shared with scraper/share_d3.ps1)
+            self.http.headers["Authorization"] = f"Bearer {token}"
         try:
             r = self.http.get(self.url + "/health", timeout=5)
             info = r.json() if r.status_code == 200 else {}
         except requests.exceptions.RequestException as e:
-            raise ConnectionError(f"the d3 server at {self.url} isn't answering ({type(e).__name__}). "
-                                  f"Start it with scraper\\start_d3_server.ps1 (or python scraper/d3_server.py)") from None
+            remote = not re.match(r"https?://(127\.0\.0\.1|localhost|\[::1\])(:|/|$)", self.url)
+            hint = ("Is the GPU PC on and awake, with d3 shared (scraper\\share_d3.ps1 on it), and is this computer on "
+                    "the same network or Tailscale?") if remote else \
+                "Start it with scraper\\start_d3_server.ps1 (or python scraper/d3_server.py)"
+            raise ConnectionError(f"the d3 server at {self.url} isn't answering ({type(e).__name__}). {hint}") from None
         except ValueError:
             info = {}
+        if r.status_code == 401:
+            raise ConnectionError(f"the d3 server at {self.url} refused this computer: D3_TOKEN in .env.local is missing or "
+                                  "doesn't match the GPU PC's (scraper\\share_d3.ps1 on the PC prints it)")
         if not info.get("ok"):
             raise ConnectionError(f"{self.url}/health didn't answer like the d3 server (HTTP {r.status_code})")
         rev = str(info.get("revision") or "")
@@ -354,6 +412,11 @@ class D3:
             "category": {"type": "choice", "instructions": CATEGORY_Q, "criteria": CATEGORIES},
             "level": {"type": "choice", "instructions": LEVEL_Q, "criteria": LEVELS},
             "us": {"type": "noul", "instructions": US_Q},
+        } if not self.job else {
+            "computational": {"type": "noul", "instructions": JOB_COMPUTATIONAL_Q},
+            "category": {"type": "choice", "instructions": JOB_CATEGORY_Q, "criteria": CATEGORIES},
+            "seniority": {"type": "choice", "instructions": SENIORITY_Q, "criteria": SENIORITY},
+            "us": {"type": "noul", "instructions": JOB_US_Q},
         }
         r = self.http.post(self.url + "/v1/systemone", json={"state": state, "questions": questions}, timeout=self.timeout)
         if r.status_code != 200:
@@ -365,8 +428,17 @@ class D3:
         return r.json()["answers"]
 
     def classify(self, title: str, company: str, description: str, location: str = "") -> Verdict:
-        answers = self.ask(posting_text(title, company, description, location))
+        answers = self.ask(posting_text(title, company, description, location, self.job))
         cat, cp = best_choice(answers["category"], CATEGORIES)
+        if self.job:
+            probs = {k.strip().lower(): v for k, v in _probs(answers["seniority"]).items()}
+            if not any(k in probs for k in SENIORITY):
+                raise ValueError(f"none of {list(SENIORITY)} in {answers['seniority']!r}")
+            senior = probs.get("senior", 0.0)
+            level = "mid" if probs.get("mid", 0.0) > probs.get("entry", 0.0) else "entry"
+            comp, us = p_yes(answers["computational"]), p_yes(answers["us"])
+            note = f"fit {comp:.0%}, {cat} {cp:.0%}, {level}, senior {senior:.0%}, US {us:.0%}"
+            return Verdict(round(comp, 3), cat, round(cp, 3), "d3", note, us=round(us, 3), senior=round(senior, 3), level=level)
         level = {k: v for k, v in _probs(answers["level"]).items()}
         undergrad = next((v for k, v in level.items() if k.strip().lower() == "undergrad_only"), None)
         if undergrad is None:
@@ -516,7 +588,13 @@ class Classifier:
     """Picks the backend, caches verdicts by posting text, and falls back to rules per posting
     if the model errors on one."""
 
-    def __init__(self, backend: str = "auto", cache_path: str | None = CACHE_PATH, llm_client=None, d3_session=None):
+    def __init__(self, backend: str = "auto", cache_path: str | None = CACHE_PATH, llm_client=None, d3_session=None,
+                 job: bool = False):
+        """job: classify full-time roles (pipeline.py --kind job) with their own d3 questions: fit for a recent
+        graduate, area, seniority and US. Claude's prompt is written for internships, so job mode uses d3 (or rules)."""
+        if job and backend == "llm":
+            raise ValueError("full-time roles are classified by d3 (or keyword rules), not --classifier llm")
+        self.job = job
         self.backend, self.d3, self.llm, self.cache_path = backend, None, None, cache_path
         self.llm_failures, self.d3_failures, self._lock = 0, 0, threading.Lock()
         self.fallback_reason = ""   # why the model wasn't used (for some or all of this run), for the run summary
@@ -527,7 +605,7 @@ class Classifier:
                 raise ConnectionError(why)
         elif backend in ("auto", "d3"):
             try:
-                self.d3 = D3(session=d3_session)
+                self.d3 = D3(session=d3_session, job=job)
             except Exception as e:  # server not started, still loading, wrong D3_URL...
                 self.fallback_reason = f"d3 not used: {str(e)[:280]}"
                 log.warning("d3 unavailable (%s). Using keyword rules for this run.", str(e)[:300])
@@ -545,8 +623,9 @@ class Classifier:
 
     def _key(self, title: str, company: str, description: str, location: str = "") -> str:
         model = self.llm.model if self.llm else self.d3.model if self.d3 else ""
-        text = posting_text(title, company, description, location if self.d3 else "")
-        return hashlib.sha256(f"{self.name}\n{model}\n{QUESTIONS_V}\n{text}".encode()).hexdigest()[:24]
+        text = posting_text(title, company, description, location if self.d3 else "", self.job)
+        version = f"job{JOB_QUESTIONS_V}" if self.job else QUESTIONS_V
+        return hashlib.sha256(f"{self.name}\n{model}\n{version}\n{text}".encode()).hexdigest()[:24]
 
     def peek(self, title: str, company: str, description: str, location: str = "") -> Verdict | None:
         """The cached answer for a posting, without asking the model (None if it hasn't been asked yet)."""
@@ -617,6 +696,8 @@ class Classifier:
                 log.warning("d3 failed on %r (%s: %s); keyword rules for it", title, e.__class__.__name__, str(e)[:200])
         if v is None:
             v = rules_classify(title, company, description)
+            if self.job:
+                v = rules_job_level(v, description)
         if v.backend == self.name:   # don't cache a fallback answer under the model's key
             with self._lock:
                 self.cache[key] = asdict(v)

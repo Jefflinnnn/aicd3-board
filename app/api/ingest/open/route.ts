@@ -16,7 +16,7 @@ export async function GET(req: Request) {
   const refused = refuseIngest(req)
   if (refused) return refused
   const rows = await db().posting.findMany({
-    where: { state: "live", closed: false },
+    where: { kind: "internship", state: "live", closed: false },
     select: { id: true, company: true, reqId: true, url: true, title: true },
     orderBy: { company: "asc" },
   })

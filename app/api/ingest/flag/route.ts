@@ -28,7 +28,7 @@ export async function POST(req: Request) {
   const parsed = z.object({ ids: idsSchema, reasons: z.record(z.string(), z.string().max(300)).optional() }).safeParse(body)
   if (!parsed.success) return Response.json({ error: "ids must be a list of posting ids" }, { status: 400 })
   const { ids, reasons = {} } = parsed.data
-  const rows = await db().posting.findMany({ where: { id: { in: ids }, state: "live", closed: false } })
+  const rows = await db().posting.findMany({ where: { id: { in: ids }, kind: "internship", state: "live", closed: false } })
   if (!rows.length) return Response.json({ ok: true, flagged: 0 })
   const now = Date.now()
   const flagged = await db().$transaction(async (tx) => {

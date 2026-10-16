@@ -40,6 +40,12 @@ export interface Job {
   /** Earliest and latest month (1-12) the internship can start, when the posting says. */
   startFrom?: number
   startTo?: number
+  /** "job" for a full-time role (the private Full-time roles tab); internships leave it out. */
+  kind?: "job"
+  /** Full-time roles: "entry" (0-2 years) or "mid" (2-5 years), when d3 could tell. */
+  level?: string
+  /** Full-time roles: why d3 was unsure about it. */
+  note?: string
 }
 
 /** Why a posting is held back from students, and where it stands with staff. */
@@ -51,6 +57,8 @@ export interface ReviewInfo {
   at: number
   status: "pending" | "rejected"
   decidedAt?: number
+  /** a rejected posting's other identifiers seen in later imports (lib/importer.ts memoryKeys), so it stays rejected */
+  seen?: string[]
 }
 /** A posting waiting in the review queue. These live in a staff-only area and never reach students. */
 export type StagedJob = Job & { review: ReviewInfo }
