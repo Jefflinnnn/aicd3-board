@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react"
 import {
   ArrowRight, BriefcaseBusiness, Building2, Flag, Keyboard, LayoutDashboard, Moon, PanelLeft, Settings as SettingsIcon, ShieldCheck, Sun,
+  UserRoundSearch,
 } from "lucide-react"
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator } from "@/components/ui/command"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
@@ -54,14 +55,14 @@ export function CommandMenu({ open, onOpenChange, onToggleSidebar }: { open: boo
       if (e.key === "[") { e.preventDefault(); onToggleSidebar(); return }
       if (k === "g") { gAt.current = Date.now(); return }
       if (Date.now() - gAt.current < 900) {
-        const dest = { d: "dashboard", j: "jobs", c: "companies", a: me.canEdit ? "admin" : "", s: "settings" }[k]
+        const dest = { d: "dashboard", j: "jobs", c: "companies", r: me.roles ? "roles" : "", a: me.canEdit ? "admin" : "", s: "settings" }[k]
         gAt.current = 0
         if (dest) { e.preventDefault(); go(dest) }
       }
     }
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
-  }, [open, onOpenChange, onToggleSidebar, go, me.canEdit])
+  }, [open, onOpenChange, onToggleSidebar, go, me.canEdit, me.roles])
 
   // clear the search when the menu closes, however it was closed
   // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -78,6 +79,7 @@ export function CommandMenu({ open, onOpenChange, onToggleSidebar }: { open: boo
     { id: "dashboard", label: "Dashboard", Icon: LayoutDashboard, keys: ["G", "D"] },
     { id: "jobs", label: "Job board", Icon: BriefcaseBusiness, keys: ["G", "J"] },
     { id: "companies", label: "Company info", Icon: Building2, keys: ["G", "C"] },
+    ...(me.roles ? [{ id: "roles", label: "Full-time roles", Icon: UserRoundSearch, keys: ["G", "R"] }] : []),
     ...(me.canEdit ? [{ id: "admin", label: "Admin", Icon: ShieldCheck, keys: ["G", "A"] }] : []),
     { id: "settings", label: "Settings", Icon: SettingsIcon, keys: ["G", "S"] },
   ]

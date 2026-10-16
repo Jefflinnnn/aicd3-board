@@ -27,6 +27,8 @@ export interface Me {
   role: Role
   name: string | null
   email: string | null
+  /** may open the private Full-time roles tab (PRIVATE_ROLES_EMAILS) */
+  roles?: boolean
 }
 
 /** Everything the app needs on load, scoped to what this person may see. */
@@ -125,7 +127,7 @@ export interface RefreshStatus {
    * Which classifier refreshes use. d3: set up on this server; server: whether its model server answers
    * (up) and what it runs, or the address it was looked for at; canSetup: why this server can't set up d3, or null.
    */
-  classifier: { d3: boolean; revision: string; server: { up: boolean; detail: string }; canSetup: string | null }
+  classifier: { d3: boolean; revision: string; server: { up: boolean; detail: string }; canSetup: string | null; remote?: boolean }
   /** whether this server's own timer runs automatic refreshes (never on Vercel: the GPU PC's scheduled task does) */
   schedulerHere: boolean
   /** the latest scheduled run, wherever it ran (the GPU PC's task or this server's timer) */

@@ -1,0 +1,6 @@
+{
+  "_readme": "Copy to scraper/private/roles_profile.json (git-ignored) and describe the candidate's skills. No names, contact details or links. See scraper/roles_profile.py.",
+  "summary": "Master's in AI and computational drug discovery. Builds ML models for molecular property prediction (graph neural networks, PyTorch, RDKit), cheminformatics workflows, and data pipelines in Python and SQL. Early career: an industry data science internship and about a year of research work.",
+  "terms": ["machine learning scientist", "data scientist", "cheminformatics", "computational chemistry", "bioinformatics"],
+  "title_words": ["applied scientist", "admet"]
+}

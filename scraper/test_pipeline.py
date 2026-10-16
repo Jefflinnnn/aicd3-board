@@ -320,6 +320,78 @@ class Pipeline(unittest.TestCase):
             self.assertTrue(os.path.exists(os.path.join(d, "fit.csv")))
 
 
+    def test_full_time_roles_end_to_end(self):
+        sent = {}
+
+        def fake_post(url, data=None, headers=None, timeout=None):
+            sent.update(url=url, body=json.loads(data))
+            return mock.Mock(status_code=200, json=lambda: {"added": 1, "staged": 0, "updated": 0, "closed": 0,
+                                                            "unchanged": 0, "rejected": 0, "errors": []})
+        mk = lambda t, d: pi.Posting(company="Gilead Sciences", title=t, location="Foster City, CA", url="https://x/" + t[:12],
+                                     description=d)
+        roles = [mk("Data Scientist, Pharmacometrics", "Build population PK/PD models in Python. 3+ years of experience in modeling."),
+                 mk("Scientist, Machine Learning", "Requires 8+ years of industry experience building ML models in Python.")]
+        try:
+            with tempfile.TemporaryDirectory() as d, \
+                    mock.patch.object(pi, "run", return_value=(roles, {"Gilead Sciences": "ok (2)"})), \
+                    mock.patch.object(pipeline.requests, "post", side_effect=fake_post), \
+                    mock.patch.object(c.Classifier, "save"), \
+                    mock.patch.dict(os.environ, {"AICD3_INGEST_TOKEN": "t0k", "ROLES_PROFILE": os.path.join(d, "none.json")}):
+                code = pipeline.main(["--kind", "job", "--companies", "Gilead", "--classifier", "rules", "--out", d,
+                                      "--url", "http://localhost:3000"])
+                self.assertEqual(pi.MODE, "job")
+        finally:
+            pi.set_mode("internship")
+            pi.set_job_search()
+        self.assertEqual(code, 0)
+        self.assertEqual(sent["url"], "http://localhost:3000/api/ingest?dryRun=0&closeMissing=1&reviewAll=0&kind=job")
+        self.assertEqual([r["title"] for r in sent["body"]["postings"]], ["Data Scientist, Pharmacometrics"])  # 8+ years left out
+        self.assertEqual((sent["body"]["postings"][0]["level"], sent["body"]["postings"][0]["term"]), ("mid", "Full-time"))
+        self.assertIsInstance(sent["body"]["postings"][0]["score"], int)
+
+    def test_full_time_roles_with_a_candidate_profile(self):
+        import roles_profile
+        sent = {}
+
+        def fake_post(url, data=None, headers=None, timeout=None):
+            sent.update(body=json.loads(data))
+            return mock.Mock(status_code=200, json=lambda: {"added": 1, "staged": 0, "updated": 0, "closed": 0,
+                                                            "unchanged": 0, "rejected": 0, "errors": []})
+        roles = [pi.Posting(company="Gilead Sciences", title="Scientist, ADMET Modeling", location="Foster City, CA",
+                            url="https://x/admet", description="Build GNN models for ADME endpoints in PyTorch.")]
+        made = {}
+        real = c.Classifier
+
+        def spy(*a, **k):
+            made["clf"] = real(*a, **k)
+            return made["clf"]
+        try:
+            with tempfile.TemporaryDirectory() as d:
+                prof = os.path.join(d, "p.json")
+                with open(prof, "w") as f:
+                    json.dump({"summary": "Builds graph neural networks for ADMET prediction.", "terms": ["ADMET"],
+                               "title_words": ["admet"]}, f)
+                with mock.patch.object(pi, "run", return_value=(roles, {"Gilead Sciences": "ok (1)"})), \
+                        mock.patch.object(pipeline.requests, "post", side_effect=fake_post), \
+                        mock.patch.object(pipeline, "Classifier", side_effect=spy), \
+                        mock.patch.object(c.Classifier, "save"), \
+                        mock.patch.dict(os.environ, {"AICD3_INGEST_TOKEN": "t0k", "ROLES_PROFILE": prof}):
+                    code = pipeline.main(["--kind", "job", "--companies", "Gilead", "--classifier", "rules", "--out", d,
+                                          "--url", "http://localhost:3000"])
+                self.assertEqual(code, 0)
+                self.assertEqual(pi.JOB_SEARCH, ["admet"])          # the profile's search terms replace the defaults
+                self.assertTrue(pi.is_target_role("Associate Scientist, ADMET"))
+                self.assertEqual(made["clf"].profile.terms, ["admet"])
+                # a bad profile stops the run before scraping, without printing its contents
+                with open(prof, "w") as f:
+                    json.dump({"summary": "Reach me at someone@example.com"}, f)
+                with mock.patch.dict(os.environ, {"AICD3_INGEST_TOKEN": "t0k", "ROLES_PROFILE": prof}):
+                    self.assertEqual(pipeline.main(["--kind", "job", "--classifier", "rules", "--out", d, "--url", "http://x"]), 1)
+        finally:
+            pi.set_mode("internship")
+            pi.set_job_search()
+
+
 class RequireD3(unittest.TestCase):
     """The GPU PC's scheduled refresh (--require-d3): only d3 decides."""
     postings = Pipeline.postings

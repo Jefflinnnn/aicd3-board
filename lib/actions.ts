@@ -8,7 +8,7 @@
 import { z } from "zod"
 import { authConfigured } from "@/lib/auth/server"
 import { db, dbConfigured } from "@/lib/server/db"
-import { getViewer, isStaff, requireActive, requireStaff } from "@/lib/server/access"
+import { canSeeRoles, getViewer, isStaff, requireActive, requireStaff, type Viewer } from "@/lib/server/access"
 import {
   categorySchema, idSchema, idsSchema, jobSchema, loadCategories, purgeOldBin, reviewSchema, runImport, stagedSchema,
   toJob, toStaged, touchMeta, upsertLive, upsertStaged, type ImportSummary,
@@ -29,7 +29,10 @@ export async function loadState(opts: { refresh?: boolean } = {}): Promise<LoadR
   if (!authConfigured() || !dbConfigured()) return { mode: process.env.NODE_ENV === "production" ? "unavailable" : "preview" }
   const v = await getViewer()
   if (!v) return { mode: "signedout" }
-  const me: Me = { id: v.id, canEdit: v.status === "active" && isStaff(v.role), role: v.role, name: v.name, email: v.email }
+  const me: Me = {
+    id: v.id, canEdit: v.status === "active" && isStaff(v.role), role: v.role, name: v.name, email: v.email,
+    ...(canSeeRoles(v) ? { roles: true } : {}),
+  }
   if (v.outside) return { mode: "outside", me }
   if (v.status !== "active") return { mode: v.status === "blocked" ? "blocked" : "pending", me }
 
@@ -38,7 +41,8 @@ export async function loadState(opts: { refresh?: boolean } = {}): Promise<LoadR
   if (staff && !opts.refresh) await purgeOldBin()
   const [meta, postings, statuses, notes, myReq, myRep] = await Promise.all([
     loadCategories(),
-    prisma.posting.findMany({ where: staff ? {} : { state: "live" }, orderBy: { posted: "desc" } }),
+    // internships only: full-time roles are private (loadRoles), never on the board, in the queue or in the bin
+    prisma.posting.findMany({ where: { kind: "internship", ...(staff ? {} : { state: "live" }) }, orderBy: { posted: "desc" } }),
     prisma.jobStatus.findMany({ where: { userId: v.id } }),
     prisma.jobNote.findMany({ where: { userId: v.id } }),
     prisma.companyRequest.findMany({ where: { userId: v.id, resolvedAt: null }, orderBy: { createdAt: "desc" } }),
@@ -104,14 +108,14 @@ export async function saveJobs(list: Job[]) {
 export async function moveToBin(ids: string[]) {
   await requireStaff()
   const list = idsSchema.parse(ids)
-  await db().posting.updateMany({ where: { id: { in: list }, state: "live" }, data: { state: "bin", deletedAt: new Date() } })
+  await db().posting.updateMany({ where: { kind: "internship", id: { in: list }, state: "live" }, data: { state: "bin", deletedAt: new Date() } })
   await touchMeta()
 }
 
 export async function restore(ids: string[]) {
   await requireStaff()
   const list = idsSchema.parse(ids)
-  const r = await db().posting.updateMany({ where: { id: { in: list }, state: "bin" }, data: { state: "live", deletedAt: null } })
+  const r = await db().posting.updateMany({ where: { kind: "internship", id: { in: list }, state: "bin" }, data: { state: "live", deletedAt: null } })
   await touchMeta()
   return r.count
 }
@@ -119,7 +123,7 @@ export async function restore(ids: string[]) {
 export async function deleteForever(ids: string[]) {
   const v = await requireStaff()
   const list = idsSchema.parse(ids)
-  await db().posting.deleteMany({ where: { id: { in: list }, state: "bin" } })
+  await db().posting.deleteMany({ where: { kind: "internship", id: { in: list }, state: "bin" } })
   await db().auditLog.create({ data: { actorId: v.id, action: "postings.delete-forever", detail: { ids: list } } })
 }
 
@@ -131,13 +135,13 @@ export async function saveStaged(list: StagedJob[]) {
 
 export async function dropStaged(ids: string[]) {
   await requireStaff()
-  await db().posting.deleteMany({ where: { id: { in: idsSchema.parse(ids) }, state: { in: ["review", "rejected"] } } })
+  await db().posting.deleteMany({ where: { kind: "internship", id: { in: idsSchema.parse(ids) }, state: { in: ["review", "rejected"] } } })
 }
 
 /** Approve: publish to the job board and clear from the queue. */
 export async function approve(ids: string[]) {
   await requireStaff()
-  const rows = await db().posting.findMany({ where: { id: { in: idsSchema.parse(ids) }, state: { in: ["review", "rejected"] } } })
+  const rows = await db().posting.findMany({ where: { kind: "internship", id: { in: idsSchema.parse(ids) }, state: { in: ["review", "rejected"] } } })
   await db().$transaction(async (tx) => {
     await upsertLive(tx, rows.map((r) => unstage(toStaged(r))), ["review", "rejected"])
     await touchMeta(tx)
@@ -148,7 +152,7 @@ export async function approve(ids: string[]) {
 export async function pullToReview(ids: string[], reason: string) {
   await requireStaff()
   const why = z.string().max(300).parse(reason)
-  const rows = await db().posting.findMany({ where: { id: { in: idsSchema.parse(ids) }, state: "live" } })
+  const rows = await db().posting.findMany({ where: { kind: "internship", id: { in: idsSchema.parse(ids) }, state: "live" } })
   const now = Date.now()
   await db().$transaction(async (tx) => {
     await upsertStaged(tx, rows.map((r) => ({ ...toJob(r), review: { flags: [why], source: "pulled" as const, at: now, status: "pending" as const } })), ["live"])
@@ -159,7 +163,7 @@ export async function pullToReview(ids: string[], reason: string) {
 export async function setReviewStatus(ids: string[], status: "pending" | "rejected") {
   await requireStaff()
   const st = reviewSchema.shape.status.parse(status)
-  const rows = await db().posting.findMany({ where: { id: { in: idsSchema.parse(ids) }, state: { in: ["review", "rejected"] } } })
+  const rows = await db().posting.findMany({ where: { kind: "internship", id: { in: idsSchema.parse(ids) }, state: { in: ["review", "rejected"] } } })
   await db().$transaction((tx) =>
     upsertStaged(tx, rows.map((r) => {
       const s = toStaged(r)
@@ -189,6 +193,25 @@ export async function importPostings(text: string, opts: { closeMissing: boolean
   return summary
 }
 
+/* ---------------------------------------------------------------- full-time roles (private) */
+
+/**
+ * The private Full-time roles tab: junior to mid-level roles at the tracked companies, for PRIVATE_ROLES_EMAILS only
+ * (checked here, on the server; everyone else gets nothing back).
+ */
+export async function loadRoles(): Promise<{ roles: Job[] }> {
+  const v = await requireActive()
+  if (!canSeeRoles(v)) throw new Error("forbidden")
+  const rows = await db().posting.findMany({ where: { kind: "job", state: "live" }, orderBy: { posted: "desc" } })
+  return { roles: rows.map(toJob) }
+}
+
+/** Postings this person may save or note: the live internships; staff, every internship; full-time roles only for PRIVATE_ROLES_EMAILS. */
+function visibleTo(v: Viewer): Prisma.PostingWhereInput {
+  const internships: Prisma.PostingWhereInput = { kind: "internship", ...(isStaff(v.role) ? {} : { state: "live" }) }
+  return canSeeRoles(v) ? { OR: [internships, { kind: "job", state: "live" }] } : internships
+}
+
 /* ---------------------------------------------------------------- my own data */
 
 export async function setStatus(ids: string[], s: MyStatus | null) {
@@ -201,7 +224,7 @@ export async function setStatus(ids: string[], s: MyStatus | null) {
     return
   }
   // only postings this person can see
-  const visible = await prisma.posting.findMany({ where: { id: { in: list }, ...(isStaff(v.role) ? {} : { state: "live" }) }, select: { id: true } })
+  const visible = await prisma.posting.findMany({ where: { id: { in: list }, ...visibleTo(v) }, select: { id: true } })
   await prisma.$transaction(visible.map((p) =>
     prisma.jobStatus.upsert({
       where: { userId_postingId: { userId: v.id, postingId: p.id } },
@@ -220,7 +243,7 @@ export async function setNote(id: string, text: string) {
     await prisma.jobNote.deleteMany({ where: { userId: v.id, postingId } })
     return
   }
-  const ok = await prisma.posting.count({ where: { id: postingId, ...(isStaff(v.role) ? {} : { state: "live" }) } })
+  const ok = await prisma.posting.count({ where: { id: postingId, ...visibleTo(v) } })
   if (!ok) return
   await prisma.jobNote.upsert({
     where: { userId_postingId: { userId: v.id, postingId } },

@@ -151,6 +151,79 @@ NOT_INTERN_RE = re.compile(r"(?<![A-Za-z])(early|late|mid)[-\s]stage(?![A-Za-z])
                            r"^\s*(?:interested in|don'?t see|general (?:application|interest)|join our talent)", re.IGNORECASE)
 WORKDAY_TERMS = ["intern", "internship", "co-op"]
 
+# --------------------------------------------------------------------------------------
+# Full-time roles mode (set_mode("job")): the same companies and careers-site adapters, searched for junior to
+# mid-level (0-5 years) AI and computational drug R&D roles instead of internships. They go to the private
+# Full-time roles tab (pipeline.py --kind job), never to the student board.
+MODE = "internship"
+JOB_TERMS = ["data scientist", "machine learning", "computational", "bioinformatics", "cheminformatics",
+             "pharmacometrics", "artificial intelligence", "biostatistics", "statistical programmer"]
+# titles of computational roles
+JOB_TITLE_RE = re.compile(
+    r"data scien|machine learning|\bml\b|\bai\b|artificial intelligence|gen(?:erative)?\s*ai|deep learning|"
+    r"computational|bioinformatic|cheminformatic|informatics|pharmacometric|quantitative (?:systems|pharmacolog|scien)|"
+    r"\bqsp\b|modell?ing (?:and|&) simulation|biostatistic|statistician|statistical programm|data engineer|"
+    r"ml engineer|mlops|research engineer|scientific (?:software|programm)|software engineer[^,]{0,40}(?:scien|research|discovery|r&d)|"
+    r"structural biolog|protein design|molecular (?:modell?ing|design)|\bomics\b|genomics data|real[- ]world (?:data|evidence)",
+    re.I)
+# titles above 0-5 years. "Postdoctoral Fellow" is an early-career role, so only other fellows count.
+SENIOR_TITLE_RE = re.compile(
+    r"(?<![A-Za-z])(senior|sr|principal|lead|staff|manager|director|head|vp|vice president|chief|"
+    r"distinguished|executive|fellow|iv|v|vi|level\s*[4-9])(?![A-Za-z])", re.I)
+SENIOR_OK_RE = re.compile(r"post-?doc", re.I)
+
+
+JOB_SEARCH = list(JOB_TERMS)     # what full-time roles mode searches for (a candidate profile can replace it)
+EXTRA_TITLE_RE: re.Pattern | None = None   # extra titles a candidate profile adds
+
+
+def set_mode(mode: str) -> None:
+    """"internship" (the student board) or "job" (full-time roles). Set before run()."""
+    global MODE
+    if mode not in ("internship", "job"):
+        raise ValueError(mode)
+    MODE = mode
+
+
+def set_job_search(terms: list[str] | None = None, title_words: list[str] | None = None) -> None:
+    """Tailor full-time roles mode to a candidate (scraper/roles_profile.py): its search terms replace the defaults,
+    and its title words count as computational titles too. No arguments: back to the defaults."""
+    global JOB_SEARCH, EXTRA_TITLE_RE
+    JOB_SEARCH = list(terms) if terms else list(JOB_TERMS)
+    words = [w for w in (title_words or []) if w.strip()]
+    EXTRA_TITLE_RE = re.compile("|".join(re.escape(w) for w in words), re.I) if words else None
+
+
+def is_target_role(title: str) -> bool:
+    """A junior to mid-level computational role: not an internship, not senior, and a computational title."""
+    t = title or ""
+    if is_internship(t) or not (JOB_TITLE_RE.search(t) or (EXTRA_TITLE_RE and EXTRA_TITLE_RE.search(t))):
+        return False
+    senior = {m.group(1).lower() for m in SENIOR_TITLE_RE.finditer(t)}
+    return not senior or (senior == {"fellow"} and bool(SENIOR_OK_RE.search(t)))
+
+
+def wanted(title: str) -> bool:
+    """The title test the adapters apply: an internship, or in full-time roles mode a target role."""
+    return is_target_role(title) if MODE == "job" else is_internship(title)
+
+
+def search_terms(cfg: dict, default: list[str]) -> list[str]:
+    """What to type into a careers site's search box. A company's own "terms" are internship words."""
+    return JOB_SEARCH if MODE == "job" else cfg.get("terms", default)
+
+
+YEARS_RE = re.compile(
+    r"(?<![\d.])(\d{1,2})\s*(?:\+|or more)?\s*(?:(?:-|–|—|to)\s*\d{1,2}\s*\+?\s*)?years?['’]?\s*(?:of\s+)?"
+    r"(?:[\w/&,-]+\s+){0,6}?(?:experience|work)", re.I)
+
+
+def min_years(text: str) -> int | None:
+    """The fewest years of experience a posting asks for on any route ("PhD with 0-2 years, or MS with 5+ years"
+    is 0), or None when it doesn't say."""
+    found = [int(m.group(1)) for m in YEARS_RE.finditer(text or "") if int(m.group(1)) <= 30]
+    return min(found) if found else None
+
 DEFAULT_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
               "(KHTML, like Gecko) Chrome/129.0 Safari/537.36")
 
@@ -784,13 +857,15 @@ def scrape_workday(client: PoliteClient, company: str, cfg: dict, details: bool)
         host = resolve_workday_host(client, tenant, host, site, cfg.get("alt_hosts", []))
         board, _ = workday_urls(tenant, host, site)
         everything = bool(opts.get("all"))     # a student-only board: take every posting on it
+        if everything and MODE == "job":
+            continue                           # nothing but internships there
         log.info("   %s: searching %s", company, board)
         try:
-            for term in ([""] if everything else cfg.get("terms", WORKDAY_TERMS)):
+            for term in ([""] if everything else search_terms(cfg, WORKDAY_TERMS)):
                 before = len(out)
                 for jp in workday_search(client, tenant, host, site, term):
                     title, path = jp.get("title", ""), jp.get("externalPath", "")
-                    if not path or path in out or not (everything or is_internship(title)):
+                    if not path or path in out or not (everything or wanted(title)):
                         continue
                     out[path] = workday_listing(company, board, tenant, site, jp)
                 log.info("   %s: %s %r: %d new internship listings", company, site, term or "(everything)", len(out) - before)
@@ -799,7 +874,7 @@ def scrape_workday(client: PoliteClient, company: str, cfg: dict, details: bool)
         except (BlockedError, requests.HTTPError) as e:
             log.warning("%s: JSON API failed (%s) - falling back to sitemap", company, e)
             for p in workday_sitemap(client, tenant, host, site):
-                if is_internship(p.title) and p.url not in out:
+                if wanted(p.title) and p.url not in out:
                     p.company = company
                     out[p.url] = p
             continue
@@ -887,13 +962,15 @@ def scrape_workday_browser(client: PoliteClient, company: str, cfg: dict, detail
             for tenant, host, site, *opt in cfg["boards"]:
                 opts = opt[0] if opt else {}
                 everything = bool(opts.get("all"))
+                if everything and MODE == "job":
+                    continue
                 board, api = workday_urls(tenant, host, site)
                 log.info("   %s: opening %s in the browser", company, board)
                 resp = page.goto(board, wait_until="domcontentloaded", timeout=45_000)
                 log.info("   %s: page loaded (HTTP %s, title %r)", company, resp.status if resp else "?", page.title()[:60])
                 api_path = urlparse(api).path   # same-origin call from the board page
                 found: list[Posting] = []
-                for term in ([""] if everything else cfg.get("terms", WORKDAY_TERMS)):
+                for term in ([""] if everything else search_terms(cfg, WORKDAY_TERMS)):
                     total, offset = None, 0
                     while True:
                         data = call(page, f"{api_path}/jobs", {"appliedFacets": {}, "limit": WD_PAGE, "offset": offset, "searchText": term})
@@ -901,7 +978,7 @@ def scrape_workday_browser(client: PoliteClient, company: str, cfg: dict, detail
                         rows = data.get("jobPostings") or []
                         for jp in rows:
                             path = jp.get("externalPath", "")
-                            if path and f"{board}{path}" not in out and (everything or is_internship(jp.get("title", ""))):
+                            if path and f"{board}{path}" not in out and (everything or wanted(jp.get("title", ""))):
                                 p = workday_listing(company, board, tenant, site, jp)
                                 out[p.url] = p
                                 found.append(p)
@@ -932,7 +1009,7 @@ def scrape_greenhouse(client: PoliteClient, company: str, cfg: dict, details: bo
     r.raise_for_status()
     out = []
     for j in r.json().get("jobs", []):
-        if not is_internship(j.get("title", "")):
+        if not wanted(j.get("title", "")):
             continue
         locs = [clean(x) for x in re.split(r"\s*;\s*", (j.get("location") or {}).get("name") or "") if clean(x)]
         p = Posting(
@@ -958,7 +1035,7 @@ def scrape_ashby(client: PoliteClient, company: str, cfg: dict, details: bool) -
     out = []
     for j in r.json().get("jobs", []):
         title = clean(j.get("title"))
-        if not (is_internship(title) or (j.get("employmentType") == "Intern" and not NOT_INTERN_RE.search(title))):
+        if not (wanted(title) or (MODE == "internship" and j.get("employmentType") == "Intern" and not NOT_INTERN_RE.search(title))):
             continue
         if j.get("isListed") is False:
             continue
@@ -1022,7 +1099,7 @@ def parse_successfactors(html: str, base: str) -> tuple[list[dict], int | None]:
 def scrape_successfactors(client: PoliteClient, company: str, cfg: dict, details: bool,
                           max_pages: int = 30) -> list[Posting]:
     base, out = cfg["base"].rstrip("/"), {}
-    for term in cfg.get("terms", ["intern"]):
+    for term in search_terms(cfg, ["intern"]):
         startrow = 0
         for _ in range(max_pages):
             qs = urlencode({"q": term, "locale": cfg.get("locale", "en_US"), "startrow": startrow})
@@ -1030,7 +1107,7 @@ def scrape_successfactors(client: PoliteClient, company: str, cfg: dict, details
             r.raise_for_status()
             rows, total = parse_successfactors(r.text, base)
             for row in rows:
-                if row["url"] not in out and is_internship(row["title"]):
+                if row["url"] not in out and wanted(row["title"]):
                     out[row["url"]] = Posting(company=company, source="successfactors", **row)
             startrow += SF_PAGE
             if not rows or (total is not None and startrow >= total):
@@ -1123,7 +1200,7 @@ def scrape_abbvie_sitemap(client: PoliteClient, company: str, cfg: dict, details
     out = []
     for u in dict.fromkeys(job_urls):
         p = abbvie_slug_to_posting(u)
-        if not is_internship(p.title):
+        if not wanted(p.title):
             continue
         if details:
             page = enrich_from_page(client, p, ("[itemprop=description]", ".job-description", ".vacancy-description", "article"))
@@ -1186,7 +1263,7 @@ def _phenom_locations(job: dict) -> list[str]:
 def scrape_phenom(client: PoliteClient, company: str, cfg: dict, details: bool, max_pages: int = 20) -> list[Posting]:
     base, path = cfg["base"].rstrip("/"), cfg.get("path", "/us/en")
     out: dict[str, Posting] = {}
-    for term in cfg.get("terms", ["intern"]):
+    for term in search_terms(cfg, ["intern"]):
         for page in range(max_pages):
             r = client.get(f"{base}{path}/search-results?" + urlencode({"keywords": term, "from": page * PHENOM_PAGE, "s": 1}),
                            headers={"Accept": "text/html"})
@@ -1195,7 +1272,7 @@ def scrape_phenom(client: PoliteClient, company: str, cfg: dict, details: bool, 
             jobs = ((found.get("data") or {}).get("jobs")) or []
             for j in jobs:
                 title, url = clean(j.get("title")), j.get("jobUrl") or ""
-                if not url or url in out or not is_internship(title):
+                if not url or url in out or not wanted(title):
                     continue
                 locs = _phenom_locations(j)
                 out[url] = Posting(company=company, title=title, location=locs[0] if locs else "", locations=locs,
@@ -1266,13 +1343,13 @@ def parse_abbvie_search(html: str, base: str) -> tuple[list[dict], int | None]:
 def scrape_abbvie_search(client: PoliteClient, company: str, cfg: dict, details: bool, max_pages: int = 30) -> list[Posting]:
     base, path = cfg["base"].rstrip("/"), cfg.get("path", "/en/jobs")
     out: dict[str, Posting] = {}
-    for term in cfg.get("terms", ["intern"]):
+    for term in search_terms(cfg, ["intern"]):
         for page in range(1, max_pages + 1):
             r = client.get(f"{base}{path}?" + urlencode({"q": term, "page": page}), headers={"Accept": "text/html"})
             r.raise_for_status()
             rows, total = parse_abbvie_search(r.text, base)
             for row in rows:
-                if row["url"] in out or not (is_internship(row["title"]) or re.search(r"intern", row["job_type"], re.I)):
+                if row["url"] in out or not (wanted(row["title"]) or (MODE == "internship" and re.search(r"intern", row["job_type"], re.I))):
                     continue
                 mode = row["mode"].lower()
                 out[row["url"]] = Posting(
@@ -1346,7 +1423,7 @@ REQ_ID_RE = re.compile(r"\b(?:Job|Req(?:uisition)?)\s*(?:ID|#|Number)\s*:?\s*([A
 def scrape_radancy(client: PoliteClient, company: str, cfg: dict, details: bool, max_pages: int = 20) -> list[Posting]:
     base, path = cfg["base"].rstrip("/"), cfg.get("path", "/en/search-jobs")
     out: dict[str, Posting] = {}
-    for term in cfg.get("terms", ["intern"]):
+    for term in search_terms(cfg, ["intern"]):
         last = max_pages
         for page in range(1, max_pages + 1):
             r = client.get(f"{base}{path}/{term}" + (f"?p={page}" if page > 1 else ""), headers={"Accept": "text/html"})
@@ -1356,7 +1433,7 @@ def scrape_radancy(client: PoliteClient, company: str, cfg: dict, details: bool,
                 per = meta["per_page"] or len(rows) or 1
                 last = min(max_pages, max(1, -(-meta["total"] // per)))
             for row in rows:
-                if row["url"] in out or not is_internship(row["title"]):
+                if row["url"] in out or not wanted(row["title"]):
                     continue
                 locs = row["locations"]
                 out[row["url"]] = Posting(company=company, title=row["title"], location=locs[0] if locs else "",

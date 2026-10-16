@@ -4,7 +4,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import Link from "next/link"
 import { useNow } from "@/lib/useNow"
 import { usePathname, useRouter } from "next/navigation"
-import { BriefcaseBusiness, Building2, ChevronRight, ChevronsUpDown, Keyboard, LogOut, Monitor, Moon, Sun, GraduationCap, LayoutDashboard, Lock, PanelLeftClose, PanelLeftOpen, Search, Settings as SettingsIcon, ShieldCheck } from "lucide-react"
+import { BriefcaseBusiness, Building2, ChevronRight, ChevronsUpDown, Keyboard, LogOut, Monitor, Moon, Sun, GraduationCap, LayoutDashboard, UserRoundSearch, Lock, PanelLeftClose, PanelLeftOpen, Search, Settings as SettingsIcon, ShieldCheck } from "lucide-react"
 import { Toaster } from "@/components/ui/sonner"
 import {
   DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuRadioGroup,
@@ -30,9 +30,11 @@ const PAGES = [
   { id: "dashboard", label: "Dashboard", Icon: LayoutDashboard },
   { id: "jobs", label: "Job Board", Icon: BriefcaseBusiness },
   { id: "companies", label: "Company Info", Icon: Building2 },
+  // private: only for PRIVATE_ROLES_EMAILS (me.roles); the server checks it again before sending any role
+  { id: "roles", label: "Full-time Roles", Icon: UserRoundSearch },
   { id: "admin", label: "Admin", Icon: ShieldCheck },
 ] as const
-const ALL_PAGES = ["dashboard", "jobs", "companies", "admin", "settings"]
+const ALL_PAGES = ["dashboard", "jobs", "companies", "roles", "admin", "settings"]
 /** Each page has its own URL: / is the dashboard, the rest are /jobs, /companies, /admin and /settings. */
 const pageFromPath = (path: string | null) => {
   const seg = (path || "/").split("/")[1] || "dashboard"
@@ -45,7 +47,7 @@ function Logo() {
   return <svg viewBox="52 50 400 400" className="size-[26px]" aria-hidden dangerouslySetInnerHTML={{ __html: AICD_LOGO_INNER }} />
 }
 
-const PAGE_LABEL: Record<string, string> = { dashboard: "Dashboard", jobs: "Job board", companies: "Company info", admin: "Admin", settings: "Settings" }
+const PAGE_LABEL: Record<string, string> = { dashboard: "Dashboard", jobs: "Job board", companies: "Company info", roles: "Full-time roles", admin: "Admin", settings: "Settings" }
 const isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent)
 
 /** The public demo's notice: what this is, that the data is made up, and where the real board lives. */
@@ -255,7 +257,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         {!collapsed && n > 0 && (
           <span aria-label={badgeLabel} className={cn("ml-auto min-w-5 rounded-full px-1.5 text-center text-[0.68rem] font-semibold leading-5 tabular-nums", id === "admin" ? "bg-warn-soft text-warn" : "bg-primary/10 text-primary")}>{n}</span>
         )}
-        {!collapsed && id === "admin" && n === 0 && <Lock className="ml-auto size-3.5 opacity-50" aria-label="staff only" />}
+        {!collapsed && (id === "admin" || id === "roles") && n === 0 && <Lock className="ml-auto size-3.5 opacity-50" aria-label={id === "roles" ? "only you" : "staff only"} />}
         {collapsed && n > 0 && <span aria-label={badgeLabel} className={cn("absolute right-1 top-1 size-2 rounded-full ring-2 ring-sidebar", id === "admin" ? "bg-warn" : "bg-primary")} />}
       </Link>
     )
@@ -338,7 +340,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                 className={cn("absolute rounded-lg bg-sidebar-active", pillReady && "transition-[top,left,width,height,opacity] duration-300 [transition-timing-function:cubic-bezier(.3,.7,.2,1)]", !pill && "opacity-0")}
                 style={pill ? { top: pill.top, left: pill.left, width: pill.width, height: pill.height } : undefined}
               />
-              {PAGES.filter((p) => p.id !== "admin" || me.canEdit).map((p) => <NavItem key={p.id} {...p} />)}
+              {PAGES.filter((p) => (p.id !== "admin" || me.canEdit) && (p.id !== "roles" || backend.me.roles)).map((p) => <NavItem key={p.id} {...p} />)}
             </nav>
             {/* account block: who you are, with settings, theme, student view and shortcuts in one menu */}
             <div className="mt-auto border-t border-sidebar-line pt-2.5">
@@ -442,7 +444,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                 leaving && "-translate-y-1 opacity-0"
               )}>
               {mode === "cloud" || mode === "preview" ? (
-                page === "settings" || page === "admin" ? (
+                page === "settings" || page === "admin" || page === "roles" ? (
                   children
                 ) : !backend.loaded.jobs ? (
                   <Gate kind="loading" />

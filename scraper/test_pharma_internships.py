@@ -861,3 +861,36 @@ class UndergradOnly(unittest.TestCase):
                      ("Intern - Clinical Data", "Bachelor's degree required; MS degree preferred."),
                      ("International Cooperation Intern", "Recent graduates welcome.")]:
             self.assertFalse(pi.undergrad_only(t, d), t)
+
+
+class FullTimeRoleMode(unittest.TestCase):
+    def tearDown(self):
+        pi.set_mode("internship")
+
+    def test_titles(self):
+        yes = ["Data Scientist, Clinical Pharmacology", "Associate Scientist II, Bioinformatics", "Biostatistician",
+               "Postdoctoral Fellow - Machine Learning", "Machine Learning Engineer", "Statistical Programmer I"]
+        no = ["Senior Data Scientist", "Sr. Scientist, Computational Chemistry", "Associate Director, Biostatistics",
+              "Principal Statistical Programmer", "Staff ML Engineer", "Team Lead, Bioinformatics", "Research Fellow, AI",
+              "Scientist IV, Computational Biology", "Intern - Data Science", "Lab Technician"]
+        for t in yes:
+            self.assertTrue(pi.is_target_role(t), t)
+        for t in no:
+            self.assertFalse(pi.is_target_role(t), t)
+
+    def test_mode_switches_the_title_test_and_search_terms(self):
+        cfg = {"terms": ["intern", "praktikum"]}
+        self.assertTrue(pi.wanted("Data Science Intern"))
+        self.assertEqual(pi.search_terms(cfg, ["intern"]), ["intern", "praktikum"])
+        pi.set_mode("job")
+        self.assertFalse(pi.wanted("Data Science Intern"))
+        self.assertTrue(pi.wanted("Data Scientist"))
+        self.assertEqual(pi.search_terms(cfg, ["intern"]), pi.JOB_TERMS)
+        with self.assertRaises(ValueError):
+            pi.set_mode("contract")
+
+    def test_min_years(self):
+        self.assertEqual(pi.min_years("PhD with 0-2 years of experience, or MS with 5+ years of relevant industry experience"), 0)
+        self.assertEqual(pi.min_years("Requires 8+ years of experience"), 8)
+        self.assertEqual(pi.min_years("BS and 6-8 years of pharmaceutical industry experience"), 6)
+        self.assertIsNone(pi.min_years("Founded 10 years ago"))

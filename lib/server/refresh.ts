@@ -72,15 +72,26 @@ export function runnerProblem(): string | null {
   return g.__pyCheck.problem
 }
 
+/**
+ * d3 on another computer: D3_URL points this copy of the app at the GPU PC's d3 server (shared with
+ * scraper/share_d3.ps1, which also gives the D3_TOKEN to put beside it). Refreshes started here then classify with
+ * that d3 and never fall back to keyword rules.
+ */
+export const remoteD3 = () => {
+  const u = (process.env.D3_URL || "").trim()
+  return !!u && !/^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:|\/|$)/i.test(u)
+}
+
 /** Whether d3 is set up for refreshes, and whether this server can set it up. */
-export function classifierInfo(): { d3: boolean; revision: string; canSetup: string | null } {
-  const d3 = fs.existsSync(D3_OK) && fs.existsSync(VENV_PY)
+export function classifierInfo(): { d3: boolean; revision: string; canSetup: string | null; remote: boolean } {
+  const remote = remoteD3()
+  const d3 = remote || (fs.existsSync(D3_OK) && fs.existsSync(VENV_PY))
   const canSetup = process.env.VERCEL
     ? "Set up d3 from a copy of the app running on a PC with a large NVIDIA GPU (64 GB or more, e.g. an RTX PRO 6000)."
     : !(WIN || process.platform === "linux")
       ? "d3 needs a Windows or Linux PC with an NVIDIA GPU with 64 GB or more of memory (e.g. an RTX PRO 6000)."
       : !fs.existsSync(SETUP) ? `scraper/${path.basename(SETUP)} is missing from this server.` : null
-  return { d3, revision: d3 ? d3Revision() : "", canSetup }
+  return { d3, revision: d3 ? d3Revision() : "", canSetup: remote ? "d3 runs on the GPU PC (D3_URL)." : canSetup, remote }
 }
 
 /** Whether the d3 model server (scraper/d3_server.py) answers on this computer. */
@@ -88,7 +99,12 @@ export async function d3Server(): Promise<{ up: boolean; detail: string }> {
   const url = (process.env.D3_URL || `http://127.0.0.1:${process.env.D3_PORT || 8765}`).replace(/\/$/, "")
   if (process.env.VERCEL) return { up: false, detail: url }
   try {
-    const r = await fetch(url + "/health", { signal: AbortSignal.timeout(2000), cache: "no-store" })
+    const token = process.env.D3_TOKEN
+    const r = await fetch(url + "/health", {
+      signal: AbortSignal.timeout(remoteD3() ? 4000 : 2000), cache: "no-store",
+      headers: token ? { authorization: `Bearer ${token}` } : {},
+    })
+    if (r.status === 401) return { up: false, detail: `${url} (it refused D3_TOKEN)` }
     const h = (await r.json()) as { ok?: boolean; model?: string; gpu?: string }
     if (r.ok && h?.ok) return { up: true, detail: [h.model, h.gpu].filter(Boolean).join(" on ") }
   } catch {}
@@ -193,7 +209,8 @@ export async function startRefresh(trigger: "manual" | "schedule" | "setup", req
   const summaryPath = path.join(os.tmpdir(), `aicd3-run-${run.id}.json`)
   const [cmd, args] = trigger === "setup"
     ? WIN ? ["powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", SETUP]] : ["bash", [SETUP]]
-    : [python(), [SCRIPT, "--url", selfUrl(), "--summary-json", summaryPath]]
+    // with d3 on the GPU PC (D3_URL), only d3 decides: no keyword-rule fallback, as on the PC's own refreshes
+    : [python(), [SCRIPT, "--url", selfUrl(), "--summary-json", summaryPath, ...(remoteD3() ? ["--require-d3"] : [])]]
   const rev = d3Revision()
   const child = spawn(cmd, args, {
     cwd: ROOT,

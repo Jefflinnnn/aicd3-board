@@ -41,6 +41,10 @@ export const jobSchema = z.object({
   addedAt: z.number().int().nonnegative().optional(),
   startFrom: z.number().int().min(1).max(12).optional(),
   startTo: z.number().int().min(1).max(12).optional(),
+  kind: z.literal("job").optional(),
+  level: text(20).optional(),
+  note: text(400).optional(),
+  score: z.number().int().min(0).max(100).optional(),
 })
 export const reviewSchema = z.object({
   flags: z.array(text(300)).max(30),
@@ -48,6 +52,7 @@ export const reviewSchema = z.object({
   at: z.number().int().nonnegative(),
   status: z.enum(["pending", "rejected"]),
   decidedAt: z.number().int().nonnegative().optional(),
+  seen: z.array(text(600)).max(30).optional(),
 })
 export const stagedSchema = jobSchema.extend({ review: reviewSchema })
 export const categorySchema = z.object({
@@ -68,6 +73,7 @@ export function toJob(r: Posting): Job {
     ...(r.closed ? { closed: true } : {}),
     ...(r.addedAt ? { addedAt: r.addedAt.getTime() } : {}),
     ...(r.startFrom ? { startFrom: r.startFrom, startTo: r.startTo ?? r.startFrom } : {}),
+    ...(r.kind === "job" ? { kind: "job" as const, level: r.level, note: r.note, ...(r.score != null ? { score: r.score } : {}) } : {}),
   }
 }
 export const toStaged = (r: Posting): StagedJob => ({ ...toJob(r), review: r.review as unknown as ReviewInfo })
@@ -80,6 +86,8 @@ function fields(j: Job) {
     term: j.term, mode: j.mode, pay: j.pay, url: j.url, reqId: (j.reqId || "").trim(), summary: j.summary, resp: j.resp, quals: j.quals,
     closed: !!j.closed, sample: !!j.sample, addedAt: j.addedAt ? new Date(j.addedAt) : null,
     startFrom: j.startFrom ?? null, startTo: j.startFrom ? (j.startTo ?? j.startFrom) : null,
+    // only an import of full-time roles sets these; an edit or an internship import leaves a posting's kind alone
+    ...(j.kind === "job" ? { kind: "job", level: j.level ?? "", note: j.note ?? "", score: j.score ?? null } : {}),
   }
 }
 
@@ -101,7 +109,8 @@ export async function touchMeta(tx: Tx | ReturnType<typeof db> = db(), patch: { 
  * put it back in front of students.
  */
 async function writeIf(tx: Tx, id: string, from: PostingState[], data: Omit<Prisma.PostingUncheckedCreateInput, "id">) {
-  const r = await tx.posting.updateMany({ where: { id, state: { in: from } }, data })
+  // a write only changes a posting of its own kind: an internship edit can't touch a private full-time role
+  const r = await tx.posting.updateMany({ where: { id, kind: data.kind ?? "internship", state: { in: from } }, data })
   if (r.count) return true
   const exists = await tx.posting.findUnique({ where: { id }, select: { id: true } })
   if (exists) return false
@@ -152,12 +161,22 @@ export interface ImportSummary {
   unlisted: number
 }
 
-export async function runImport(text: string, opts: { closeMissing: boolean; reviewAll: boolean; dryRun?: boolean }): Promise<ImportSummary> {
+export type PostingKind = "internship" | "job"
+
+/**
+ * An import only ever sees, matches and closes postings of its own kind: a run of full-time roles can't close or
+ * change internships, and the other way round. Full-time roles never go to the staff review queue (they're private
+ * to PRIVATE_ROLES_EMAILS): ones the scraper was unsure about are listed with a note instead.
+ */
+export async function runImport(text: string, opts: { closeMissing: boolean; reviewAll: boolean; dryRun?: boolean; kind?: PostingKind }): Promise<ImportSummary> {
   await loadCategories()
-  const rows = await db().posting.findMany({ where: { state: { in: ["live", "review", "rejected"] } } })
+  const kind = opts.kind ?? "internship"
+  const rows = await db().posting.findMany({ where: { kind, state: { in: ["live", "review", "rejected"] } } })
   const live = rows.filter((r) => r.state === "live").map(toJob)
   const staged = rows.filter((r) => r.state !== "live").map(toStaged)
-  const plan = planImport(text, live, opts.closeMissing, staged, opts.reviewAll)
+  const plan = kind === "job"
+    ? planImport(text, live, opts.closeMissing, [], false, true)
+    : planImport(text, live, opts.closeMissing, staged, opts.reviewAll)
   const summary: ImportSummary = {
     added: plan.add.length, updated: plan.update.length, closed: plan.close.length, staged: plan.stage.length,
     restaged: plan.restage.length, rejected: plan.rejected, unchanged: plan.unchanged,
@@ -169,9 +188,11 @@ export async function runImport(text: string, opts: { closeMissing: boolean; rev
       await tx.posting.updateMany({ where: { id: { in: plan.unlist.map((j) => j.id) }, state: "live" }, data: { state: "bin", deletedAt: new Date() } })
     if (plan.dropStale.length)
       await tx.posting.deleteMany({ where: { id: { in: plan.dropStale.map((s) => s.id) }, state: "review" } })
-    await upsertStaged(tx, [...plan.stage, ...plan.restage])
+    await upsertStaged(tx, [...plan.stage, ...plan.restage, ...plan.remember])
     await upsertLive(tx, [...plan.add, ...plan.update, ...plan.close])
-    await touchMeta(tx, { lastImport: { at: Date.now(), added: plan.add.length, updated: plan.update.length, closed: plan.close.length } })
+    // the board's "last updated" is about internships; a run of private full-time roles leaves it alone
+    if (kind === "internship")
+      await touchMeta(tx, { lastImport: { at: Date.now(), added: plan.add.length, updated: plan.update.length, closed: plan.close.length } })
   }, { timeout: 120_000, maxWait: 20_000 })
   return summary
 }

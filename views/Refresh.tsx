@@ -250,7 +250,9 @@ export function Refresh() {
       {st && !st.queue && st.classifier.d3 && !st.classifier.server.up && (
         <p className="mt-3 flex items-start gap-2 rounded-md bg-warn-soft px-3 py-2 text-sm text-warn">
           <AlertTriangle className="mt-0.5 size-4 shrink-0" />
-          The d3 server isn&apos;t answering at {st.classifier.server.detail}. Start it with scraper\start_d3_server.ps1, or sign out and back in.
+          {st.classifier.remote
+            ? <>d3 on the GPU PC isn&apos;t answering at {st.classifier.server.detail}, so a refresh from here would stop before scraping. Check that the PC is on and awake, that d3 is shared (scraper\share_d3.ps1 -Status on the PC), and that this computer is on the same network or Tailscale.</>
+            : <>The d3 server isn&apos;t answering at {st.classifier.server.detail}. Start it with scraper\start_d3_server.ps1, or sign out and back in.</>}
         </p>
       )}
 

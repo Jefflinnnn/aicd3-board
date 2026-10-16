@@ -36,7 +36,7 @@ export function D3RoutingDialog({ open, onOpenChange, status, tally, onSetup, bu
             <Cpu className="size-3.5" />
             {status?.queue
               ? "vllm-sr/d3, on the GPU PC that runs the refreshes"
-              : server?.up ? `vllm-sr/d3 · ${server.detail} · answering` : `vllm-sr/d3 · not answering${server?.detail ? ` at ${server.detail}` : ""}`}
+              : server?.up ? `vllm-sr/d3 · ${server.detail}${status?.classifier.remote ? " (the GPU PC)" : ""} · answering` : `vllm-sr/d3 · not answering${server?.detail ? ` at ${server.detail}` : ""}`}
             <span>· prompt version {R.QUESTIONS_V}</span>
             {t && <span>· counts from the latest refresh</span>}
           </DialogDescription>

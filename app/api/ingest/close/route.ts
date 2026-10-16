@@ -28,7 +28,7 @@ export async function POST(req: Request) {
   const parsed = z.object({ ids: idsSchema, reasons: z.record(z.string(), z.string().max(300)).optional() }).safeParse(body)
   if (!parsed.success) return Response.json({ error: "ids must be a list of posting ids" }, { status: 400 })
   const { ids, reasons } = parsed.data
-  const r = await db().posting.updateMany({ where: { id: { in: ids }, state: "live", closed: false }, data: { closed: true } })
+  const r = await db().posting.updateMany({ where: { id: { in: ids }, kind: "internship", state: "live", closed: false }, data: { closed: true } })
   if (r.count) {
     await touchMeta()
     await audit(null, "postings.check-closed", null, { ids, reasons: reasons ?? {}, closed: r.count })
