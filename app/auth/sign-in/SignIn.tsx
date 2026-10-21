@@ -21,6 +21,9 @@ import { domainsLabel, inDomains } from "@/lib/domains"
  *   Sign in          email + password (the everyday path), or "Email me a code instead" -> code -> signed in
  *                    "Forgot password?" -> code + new password -> signed in (also how a code-only account sets one)
  *
+ * ?confirm=<email> (the "Confirm your email" card for someone signed in who never entered their code): sends a
+ * code to that address and opens the code box straight away.
+ *
  * Codes go in one box that takes a pasted code and submits itself once it has 6 digits; "Send a new code" waits
  * 30 seconds between sends. The server checks the UCSF domain again (app/api/auth and lib/server/access.ts); the
  * checks here only give quick messages.
@@ -119,6 +122,24 @@ export function SignIn({ domains }: { domains: string[] }) {
     }
   }
 
+  // ?confirm=<email>: send the confirmation code once and go straight to the code box
+  const confirmFor = params.get("confirm")
+  const confirmSent = useRef(false)
+  useEffect(() => {
+    if (!confirmFor || confirmSent.current) return
+    confirmSent.current = true
+    const to = confirmFor.trim().toLowerCase()
+    setEmail(to)
+    setModeS("signin")
+    void call(authClient.emailOtp.sendVerificationOtp({ email: to, type: "email-verification" })).then(({ error }) => {
+      setStep("verify")
+      setCode("")
+      setWait(RESEND_WAIT)
+      if (error) setErr(explain(error, "Couldn't send the code. Choose “Send a new code” in a moment."))
+      else setNote(`We sent a 6-digit code to ${to} to confirm it's yours.`)
+    })
+  }, [confirmFor]) // eslint-disable-line react-hooks/exhaustive-deps
+
   const signUp = run(async () => {
     if (!name.trim()) return setErr("Enter your name.")
     const bad = checkEmail()
@@ -153,6 +174,11 @@ export function SignIn({ domains }: { domains: string[] }) {
     if (otp(value).length < 6) return setErr("Enter the 6-digit code from the email.")
     const { error } = await call(authClient.emailOtp.verifyEmail({ email: addr(), otp: otp(value) }))
     if (error) return setErr(explain(error, "That code didn't work. Check it, or send a new one."))
+    if (confirmFor && session.data?.user) {
+      // already signed in (the "Confirm your email" card): refresh the session so the board sees the confirmation
+      await call(authClient.getSession({ query: { disableCookieCache: true } }))
+      return done()
+    }
     if (!password) return setMode("signin", "Email confirmed. Sign in with your password.")
     const r = await call(authClient.signIn.email({ email: addr(), password }))
     if (r.error) return setMode("signin", "Email confirmed. Sign in with your password.")
@@ -277,7 +303,7 @@ export function SignIn({ domains }: { domains: string[] }) {
           <span className="text-lg tracking-tight"><b className="font-semibold">AICD3</b> <span className="text-muted-foreground">Job Board</span></span>
         </div>
 
-        {session.data?.user ? (
+        {session.data?.user && !(confirmFor && step === "verify") ? (
           <>
             <h1 className="font-display text-xl font-semibold">You&apos;re signed in</h1>
             <Button asChild><Link href="/">Continue as {session.data.user.name || session.data.user.email}</Link></Button>

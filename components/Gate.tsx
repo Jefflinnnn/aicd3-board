@@ -41,6 +41,18 @@ function Waiting({ kind }: { kind: "pending" | "blocked" | "outside" }) {
     blocked: ["No access", "This account doesn't have access to the job board. If you think that's a mistake, contact the program team."],
     outside: ["Use your UCSF email", "The job board is only open to UCSF email addresses. Sign out, then sign in with your @ucsf.edu address."],
   }[kind]
+  if (kind === "pending" && me.unverified && me.email) {
+    // signed in without entering the 6-digit code: send one now, instead of waiting on staff for nothing
+    return (
+      <Card icon={<Hourglass className="size-5" />} title="Confirm your email">
+        Your account isn&apos;t confirmed yet. We&apos;ll email a 6-digit code to <b className="font-medium text-foreground">{me.email}</b>; enter it and you&apos;re in.
+        <div className="mt-4 flex gap-2">
+          <Button asChild><a href={`/auth/sign-in?confirm=${encodeURIComponent(me.email)}`}>Send me a code</a></Button>
+          <Button variant="outline" onClick={signOut}>Use a different account</Button>
+        </div>
+      </Card>
+    )
+  }
   return (
     <Card icon={kind === "pending" ? <Hourglass className="size-5" /> : <ShieldX className="size-5" />} title={copy[0]}>
       {copy[1]}

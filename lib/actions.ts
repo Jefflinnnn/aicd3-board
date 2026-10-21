@@ -32,6 +32,7 @@ export async function loadState(opts: { refresh?: boolean } = {}): Promise<LoadR
   const me: Me = {
     id: v.id, canEdit: v.status === "active" && isStaff(v.role), role: v.role, name: v.name, email: v.email,
     ...(canSeeRoles(v) ? { roles: true } : {}),
+    ...(v.emailVerified ? {} : { unverified: true }),
   }
   if (v.outside) return { mode: "outside", me }
   if (v.status !== "active") return { mode: v.status === "blocked" ? "blocked" : "pending", me }
