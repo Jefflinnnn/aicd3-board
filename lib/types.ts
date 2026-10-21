@@ -29,6 +29,8 @@ export interface Me {
   email: string | null
   /** may open the private Full-time roles tab (PRIVATE_ROLES_EMAILS) */
   roles?: boolean
+  /** signed in but hasn't confirmed their email with the 6-digit code yet */
+  unverified?: boolean
 }
 
 /** Everything the app needs on load, scoped to what this person may see. */

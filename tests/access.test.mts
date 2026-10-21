@@ -110,9 +110,21 @@ describe("signing in", () => {
     }
   })
 
-  it("an unverified address at an allowed domain still waits", async () => {
+  it("an unverified address at an allowed domain still waits, and is asked to confirm", async () => {
     as(user("u-unv", "eve@school.edu", false))
+    const r = await A.loadState()
+    assert.equal(r.mode, "pending")
+    if (r.mode === "pending") assert.equal(r.me.unverified, true)
+  })
+
+  it("signing in before entering the code doesn't strand anyone: confirming later lets them in", async () => {
+    as(user("u-unv", "eve@school.edu", false))   // signed in once, before entering the code
     assert.equal((await A.loadState()).mode, "pending")
+    as(user("u-unv", "eve@school.edu", true))    // then confirmed the address with the code
+    const r = await A.loadState()
+    assert.equal(r.mode, "cloud")
+    if (r.mode === "cloud") assert.equal(r.me.unverified, undefined)
+    assert.equal(await prisma.auditLog.count({ where: { action: "access.auto-approved-on-confirm", target: "u-unv" } }), 1)
   })
 
   it("a staff invite applies on first sign-in, only to a verified address", async () => {

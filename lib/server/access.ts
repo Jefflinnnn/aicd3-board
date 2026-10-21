@@ -64,7 +64,9 @@ export const getViewer = cache(async (): Promise<Viewer | null> => {
 
   let p = await prisma.profile.findUnique({ where: { id: u.id } })
   const grant = verified && (!p || p.status === "pending") ? await prisma.accessGrant.findUnique({ where: { email } }) : null
-  const autoStudent = !p && verified && autoApprove(email)
+  // a verified address at an auto-approve domain becomes a student on first sign-in, or at the moment it's confirmed
+  // (someone who signed in before entering their code); a student staff set back to pending later stays pending
+  const autoStudent = verified && autoApprove(email) && (!p || (p.status === "pending" && !p.emailVerified))
 
   if (!p) {
     p = await prisma.profile.upsert({
@@ -84,6 +86,9 @@ export const getViewer = cache(async (): Promise<Viewer | null> => {
     p = await prisma.profile.update({ where: { id: u.id }, data: { status: "active", role: grant.role } })
     await prisma.accessGrant.deleteMany({ where: { email } })
     await audit(u.id, "access.grant-applied", u.id, { email, role: grant.role })
+  } else if (autoStudent) {
+    p = await prisma.profile.update({ where: { id: u.id }, data: { status: "active", emailVerified: true } })
+    await audit(u.id, "access.auto-approved-on-confirm", u.id, { email })
   }
   if (p.email !== email || p.name !== name || p.emailVerified !== verified) {
     p = await prisma.profile.update({ where: { id: u.id }, data: { email, name, emailVerified: verified } })
