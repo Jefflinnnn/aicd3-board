@@ -24,9 +24,9 @@ import type { RefreshRun, RunProgress } from "@/lib/types"
 type Co = RunProgress["companies"][number]
 
 const GROUPS: { id: string; label: string; dot: string; names: string[] }[] = [
-  { id: "pharma", label: "Big pharma", dot: "var(--c1)", names: ["Pfizer", "Merck", "AbbVie", "AstraZeneca", "Bristol Myers Squibb", "Sanofi", "GSK", "Boehringer Ingelheim", "Novartis", "Takeda", "Eli Lilly"] },
-  { id: "biotech", label: "Biotech", dot: "var(--c2)", names: ["Amgen", "Gilead Sciences", "Genentech", "Regeneron", "Vertex Pharmaceuticals", "Biogen", "Revolution Medicines"] },
-  { id: "ai", label: "AI & tech", dot: "var(--c3)", names: ["Recursion", "Generate:Biomedicines", "insitro", "NVIDIA"] },
+  { id: "pharma", label: "Big pharma", dot: "var(--c1)", names: ["Pfizer", "Merck", "AbbVie", "AstraZeneca", "Bristol Myers Squibb", "Sanofi", "GSK", "Boehringer Ingelheim", "Novartis", "Takeda", "Eli Lilly", "Johnson & Johnson", "Novo Nordisk", "Bayer", "Astellas", "Daiichi Sankyo", "Merck KGaA", "Otsuka", "Eisai", "UCB", "CSL", "Viatris"] },
+  { id: "biotech", label: "Biotech", dot: "var(--c2)", names: ["Amgen", "Gilead Sciences", "Genentech", "Regeneron", "Vertex Pharmaceuticals", "Biogen", "Revolution Medicines", "Moderna", "Denali Therapeutics", "Cytokinetics", "Nurix Therapeutics", "Septerna", "Maze Therapeutics", "Arsenal Bioscience", "BridgeBio"] },
+  { id: "ai", label: "AI & tech", dot: "var(--c3)", names: ["Recursion", "Generate:Biomedicines", "insitro", "Genesis Molecular AI", "Chai Discovery", "Profluent", "Noetik", "Tahoe Therapeutics", "Atomic AI", "Chan Zuckerberg Biohub", "Calico Life Sciences", "Altos Labs", "10x Genomics", "GRAIL", "Freenome", "NVIDIA"] },
 ]
 
 const W = 860

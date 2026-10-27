@@ -1,15 +1,22 @@
 #!/usr/bin/env python3
 """
-pharma_internships.py - collect internship / co-op postings from 21 pharma & biotech
-career sites using the public JSON feeds and pages that power those sites.
+pharma_internships.py - collect internship / co-op postings from 53 pharma, biotech and AI drug
+discovery career sites using the public JSON feeds and pages that power those sites.
 
-Platforms covered (verified October 2026):
+Platforms covered (verified October 2026 unless marked otherwise in COMPANIES):
   * Workday "cxs" JSON API  - Pfizer, Merck/MSD, AstraZeneca, BMS, Sanofi, GSK, Vertex,
                               Regeneron, Genentech (Roche), Amgen, Eli Lilly, Takeda,
-                              Gilead, Novartis, Biogen
-  * Greenhouse Job Board API - Revolution Medicines, Recursion, Generate:Biomedicines
-  * Ashby posting API        - insitro
-  * SAP SuccessFactors CSB   - Boehringer Ingelheim (server-rendered search pages)
+                              Gilead, Novartis, Biogen, NVIDIA, Johnson & Johnson, Moderna,
+                              Otsuka, Eisai, CSL, Viatris, Denali, Cytokinetics
+  * Greenhouse Job Board API - Revolution Medicines, Recursion, Generate:Biomedicines, Nurix,
+                              Septerna, Maze, BridgeBio, Biohub, Calico, Altos Labs, Profluent,
+                              Noetik, Atomic AI, Freenome
+  * Ashby posting API        - insitro, Genesis Molecular AI, Chai Discovery
+  * Lever postings API       - Arsenal Bioscience, Tahoe Therapeutics, GRAIL
+  * Eightfold job search API - Bayer, 10x Genomics
+  * SAP SuccessFactors CSB   - Boehringer Ingelheim, Novo Nordisk, Astellas, Daiichi Sankyo
+                              (server-rendered search pages)
+  * Phenom career sites      - Merck KGaA (EMD Serono), UCB
   * AbbVie job search        - careers.abbvie.com (its vacancy sitemap with --respect-robots)
   * Backups when Workday is down: careers.gene.com (Phenom) for Genentech,
     careers.amgen.com (Radancy) for Amgen
@@ -50,7 +57,7 @@ import time
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, field
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Iterable, Iterator
 from urllib.parse import unquote, urlencode, urljoin, urlparse
 
@@ -132,6 +139,53 @@ COMPANIES: dict[str, dict] = {
                              "require": r"(?<![A-Za-z])(health\s?care|life sciences?|biolog\w*|bioinformatic\w*|biotech\w*|"
                                         r"pharma\w*|drug|molecul\w*|protein\w*|genom\w*|chemistry|cheminformatic\w*|"
                                         r"medical|medicine|clinical|biomedical|BioNeMo|Clara|MONAI|Parabricks)(?![A-Za-z])"},
+
+    # Added October 2026. Boards found from their live postings; platforms marked "unverified" weren't reachable
+    # for a test fetch and are worth watching on the first refresh.
+    # Large pharma
+    "Johnson & Johnson":    {"id": "jnj", "platform": "workday", "boards": [("jj", "wd5", "JJ")]},
+    "Novo Nordisk":         {"id": "novonordisk", "platform": "successfactors", "base": "https://careers.novonordisk.com",
+                             "terms": ["intern", "internship", "co-op", "student"]},
+    # Eightfold; also lists Crop Science and Consumer Health jobs, which aren't drug R&D
+    "Bayer":                {"id": "bayer", "platform": "eightfold", "base": "https://talent.bayer.com", "domain": "bayer.com",
+                             "terms": ["intern", "co-op"], "skip_business_units": ["Crop Science", "Consumer Health"]},
+    "Astellas":             {"id": "astellas", "platform": "successfactors", "base": "https://careers.astellas.com"},
+    "Daiichi Sankyo":       {"id": "daiichisankyo", "platform": "successfactors", "base": "https://careers.daiichisankyo.com"},   # unverified
+    "Moderna":              {"id": "moderna", "platform": "workday", "boards": [("modernatx", "wd1", "M_tx")]},
+    "Merck KGaA":           {"id": "merck-kgaa", "platform": "phenom", "base": "https://careers.emdgroup.com", "path": "/us/en",   # unverified
+                             "terms": ["intern", "internship", "co-op"]},
+    "Otsuka":               {"id": "otsuka", "platform": "workday", "boards": [("vhr-otsuka", "wd1", "External")]},
+    "Eisai":                {"id": "eisai", "platform": "workday", "boards": [("eisai", "wd5", "eisai")]},
+    "UCB":                  {"id": "ucb", "platform": "phenom", "base": "https://careers.ucb.com", "path": "/us/en",   # unverified
+                             "terms": ["intern", "internship", "co-op"]},
+    "CSL":                  {"id": "csl", "platform": "workday", "boards": [("csl", "wd1", "CSL_External")]},
+    "Viatris":              {"id": "viatris", "platform": "workday", "boards": [("viatris", "wd5", "External")]},
+    # Bay Area biotech
+    "Denali Therapeutics":  {"id": "denali", "platform": "workday",
+                             "boards": [("dnli", "wd1", "Internships", {"all": True}), ("dnli", "wd1", "Discovery"),
+                                        ("dnli", "wd1", "Development")]},
+    "Cytokinetics":         {"id": "cytokinetics", "platform": "workday", "boards": [("cytokinetics", "wd1", "Cytokinetics")]},
+    "Nurix Therapeutics":   {"id": "nurix", "platform": "greenhouse", "token": "nurix"},
+    "Septerna":             {"id": "septerna", "platform": "greenhouse", "token": "septerna"},
+    "Maze Therapeutics":    {"id": "maze", "platform": "greenhouse", "token": "mazetherapeutics"},
+    "Arsenal Bioscience":   {"id": "arsenalbio", "platform": "lever", "site": "arsenalbio"},
+    "BridgeBio":            {"id": "bridgebio", "platform": "greenhouse", "token": "bridgebio"},
+    # Research institutes
+    "Chan Zuckerberg Biohub": {"id": "czbiohub", "platform": "greenhouse", "token": "biohub"},
+    "Calico Life Sciences": {"id": "calico", "platform": "greenhouse", "token": "calicolabs"},
+    "Altos Labs":           {"id": "altos", "platform": "greenhouse", "token": "altoslabs"},
+    # AI drug discovery
+    "Genesis Molecular AI": {"id": "genesis", "platform": "ashby", "org": "genesis-molecular-ai"},
+    "Chai Discovery":       {"id": "chai", "platform": "ashby", "org": "chaidiscovery"},
+    "Profluent":            {"id": "profluent", "platform": "greenhouse", "token": "profluent"},
+    "Noetik":               {"id": "noetik", "platform": "greenhouse", "token": "noetik"},
+    "Tahoe Therapeutics":   {"id": "tahoe", "platform": "lever", "site": "tahoebio-ai"},
+    "Atomic AI":            {"id": "atomicai", "platform": "greenhouse", "token": "atomai"},
+    # Genomics
+    "10x Genomics":         {"id": "10x", "platform": "eightfold", "base": "https://careers.10xgenomics.com",   # unverified
+                             "domain": "10xgenomics.com"},
+    "GRAIL":                {"id": "grail", "platform": "lever", "site": "grailbio"},
+    "Freenome":             {"id": "freenome", "platform": "greenhouse", "token": "freenome"},
 }
 
 # Titles that count as internships. Letter boundaries keep out "International"/"Internal"
@@ -1052,6 +1106,103 @@ def scrape_ashby(client: PoliteClient, company: str, cfg: dict, details: bool) -
 
 
 # --------------------------------------------------------------------------------------
+# Lever (public postings API, the same one jobs.lever.co pages call). One request lists every
+# posting with its full description, so --details costs nothing extra.
+# --------------------------------------------------------------------------------------
+def _remote_type(workplace: str | None) -> str:
+    wp = (workplace or "").lower()
+    return "Hybrid" if wp == "hybrid" else "Remote" if wp == "remote" else ""
+
+
+def scrape_lever(client: PoliteClient, company: str, cfg: dict, details: bool) -> list[Posting]:
+    site = cfg["site"]
+    r = client.get(f"https://api.lever.co/v0/postings/{site}", params={"mode": "json"},
+                   headers={"Accept": "application/json"})
+    r.raise_for_status()
+    out = []
+    for j in r.json() or []:
+        title = clean(j.get("text"))
+        cats = j.get("categories") or {}
+        # "Intern" as the commitment counts like an internship title (as Ashby's employmentType does)
+        intern_commitment = bool(re.search(r"(?<![A-Za-z])intern", cats.get("commitment") or "", re.I))
+        if not (wanted(title) or (MODE == "internship" and intern_commitment and not NOT_INTERN_RE.search(title))):
+            continue
+        locs = [clean(x) for x in (cats.get("allLocations") or [cats.get("location")]) if clean(x)]
+        created = j.get("createdAt")
+        posted = (datetime.fromtimestamp(created / 1000, tz=timezone.utc).date().isoformat()
+                  if isinstance(created, (int, float)) else "")
+        extra = {"remoteType": _remote_type(j.get("workplaceType"))}
+        if j.get("country"):
+            extra["country"] = j["country"]   # ISO code ("US"), which is_us reads
+        p = Posting(company=company, title=title, location=locs[0] if locs else "", locations=locs, posted=posted,
+                    req_id=str(j.get("id", "")), url=j.get("hostedUrl") or "", source=f"lever:{site}", extra=extra)
+        if details:
+            lists = "".join(f"<h3>{htmllib.escape(l.get('text') or '')}</h3><ul>{l.get('content') or ''}</ul>"
+                            for l in j.get("lists") or [])
+            body = (j.get("description") or "") + lists + (j.get("additional") or "")
+            if body.strip():
+                apply_detail_text(p, html_to_text(body))
+        out.append(p)
+    return out
+
+
+# --------------------------------------------------------------------------------------
+# Eightfold career sites (talent.bayer.com): the search page calls /api/apply/v2/jobs, which takes the
+# site's domain and pages through results 10 at a time; each job's description is a second call.
+# --------------------------------------------------------------------------------------
+EIGHTFOLD_PAGE = 10
+
+
+def scrape_eightfold(client: PoliteClient, company: str, cfg: dict, details: bool, max_pages: int = 20) -> list[Posting]:
+    base, domain = cfg["base"].rstrip("/"), cfg["domain"]
+    skip_units = {u.lower() for u in cfg.get("skip_business_units", [])}
+    out: dict[str, Posting] = {}
+    ids: dict[str, str] = {}
+    for term in search_terms(cfg, ["intern"]):
+        for page in range(max_pages):
+            r = client.get(f"{base}/api/apply/v2/jobs",
+                           params={"domain": domain, "query": term, "start": page * EIGHTFOLD_PAGE, "num": EIGHTFOLD_PAGE},
+                           headers={"Accept": "application/json"})
+            r.raise_for_status()
+            data = r.json() or {}
+            jobs = data.get("positions") or []
+            for j in jobs:
+                title = clean(j.get("posting_name") or j.get("name"))
+                url = j.get("canonicalPositionUrl") or f"{base}/careers/job/{j.get('id')}"
+                if url in out or not wanted(title):
+                    continue
+                if clean(j.get("business_unit")).lower() in skip_units:
+                    continue
+                # "Chesterfield,Missouri,United States"
+                locs = [", ".join(s.strip() for s in str(x).split(",") if s.strip())
+                        for x in (j.get("locations") or [j.get("location")]) if x]
+                created = j.get("t_create")
+                out[url] = Posting(
+                    company=company, title=title, location=locs[0] if locs else "", locations=locs,
+                    posted=(datetime.fromtimestamp(created, tz=timezone.utc).date().isoformat()
+                            if isinstance(created, (int, float)) else ""),
+                    req_id=str(j.get("display_job_id") or j.get("ats_job_id") or j.get("id") or ""),
+                    url=url, source=f"eightfold:{base}",
+                    extra={"remoteType": _remote_type(j.get("work_location_option"))})
+                ids[url] = str(j.get("id") or "")
+            if not jobs or (page + 1) * EIGHTFOLD_PAGE >= (data.get("count") or 0):
+                break
+    if details:
+        for url, p in out.items():
+            if not ids.get(url):
+                continue
+            try:
+                job = client.get(f"{base}/api/apply/v2/jobs/{ids[url]}", params={"domain": domain},
+                                 headers={"Accept": "application/json"}).json() or {}
+            except (requests.RequestException, ValueError) as e:
+                log.debug("eightfold detail %s: %s", url, e)
+                continue
+            if job.get("job_description"):
+                apply_detail_text(p, html_to_text(job["job_description"]))
+    return list(out.values())
+
+
+# --------------------------------------------------------------------------------------
 # SAP SuccessFactors Career Site Builder (server-rendered /search/ pages)
 # robots.txt disallows /services/ (incl. the RSS feed), so we use /search/ only.
 # --------------------------------------------------------------------------------------
@@ -1460,6 +1611,8 @@ SCRAPERS = {
     "workday_browser": scrape_workday_browser,
     "radancy": scrape_radancy,
     "ashby": scrape_ashby,
+    "lever": scrape_lever,
+    "eightfold": scrape_eightfold,
     "workday": scrape_workday,
     "greenhouse": scrape_greenhouse,
     "successfactors": scrape_successfactors,
@@ -1486,12 +1639,14 @@ def first_url(cfg: dict) -> str:
         return workday_urls(t, h, s)[0]
     if cfg["platform"] == "ashby":
         return f"https://jobs.ashbyhq.com/{cfg['org']}"
+    if cfg["platform"] == "lever":
+        return f"https://jobs.lever.co/{cfg['site']}"
     return cfg.get("base") or cfg.get("sitemap") or f"https://boards.greenhouse.io/{cfg.get('token')}"
 
 
 def cluster(cfg: dict) -> str:
     """Companies on the same Workday data centre share infrastructure (and probably rate limits)."""
-    return cfg["boards"][0][1] if cfg["platform"] == "workday" else cfg["platform"] + ":" + cfg.get("token", cfg.get("org", cfg.get("base", "")))
+    return cfg["boards"][0][1] if cfg["platform"] == "workday" else cfg["platform"] + ":" + cfg.get("token", cfg.get("org", cfg.get("site", cfg.get("base", ""))))
 
 
 CLUSTER_CAP = 2  # at most this many companies at once on one Workday data centre

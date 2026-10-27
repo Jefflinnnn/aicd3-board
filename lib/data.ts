@@ -1,6 +1,6 @@
 export type CatId = string
 type SeedCat = "discovery" | "development" | "tech"
-export type CoType = "Large pharma" | "Mid-size biotech" | "Startup" | "Tech"
+export type CoType = "Large pharma" | "Mid-size biotech" | "Startup" | "Institute" | "Tech"
 
 export interface Company {
   id: string
@@ -139,7 +139,7 @@ export function setCustomCategories(custom: Category[]) {
   CATS.splice(0, CATS.length, ...BASE_CATS, ...custom.map((c) => ({ ...c, custom: true })))
 }
 export const catById = (id: string) => CATS.find((c) => c.id === id) || CATS.find((c) => c.id === "other") || CATS[0]
-export const TYPES: CoType[] = ["Large pharma", "Mid-size biotech", "Startup", "Tech"]
+export const TYPES: CoType[] = ["Large pharma", "Mid-size biotech", "Startup", "Institute", "Tech"]
 
 export const COMPANIES: Company[] = [
   { id: "genentech", name: "Genentech", type: "Large pharma", hq: "South San Francisco, CA", site: "https://www.gene.com", focus: [0.4, 0.35, 0.25], w: 5 },
@@ -165,6 +165,42 @@ export const COMPANIES: Company[] = [
   { id: "takeda", name: "Takeda", type: "Large pharma", hq: "Tokyo, Japan", site: "https://www.takeda.com", focus: [0.3, 0.5, 0.2], w: 0 },
   { id: "nvidia", name: "NVIDIA", type: "Tech", hq: "Santa Clara, CA", site: "https://www.nvidia.com", focus: [0.4, 0.1, 0.5], w: 0 },
   { id: "revmed", name: "Revolution Medicines", type: "Mid-size biotech", hq: "Redwood City, CA", site: "https://www.revmed.com", focus: [0.5, 0.4, 0.1], w: 0 },
+  // added October 2026 (scraper/pharma_internships.py has their careers sites)
+  { id: "jnj", name: "Johnson & Johnson", type: "Large pharma", hq: "New Brunswick, NJ", site: "https://www.jnj.com", focus: [0.3, 0.5, 0.2], w: 0 },
+  { id: "novonordisk", name: "Novo Nordisk", type: "Large pharma", hq: "Bagsværd, Denmark", site: "https://www.novonordisk.com", focus: [0.3, 0.5, 0.2], w: 0 },
+  { id: "bayer", name: "Bayer", type: "Large pharma", hq: "Leverkusen, Germany", site: "https://www.bayer.com", focus: [0.3, 0.5, 0.2], w: 0 },
+  { id: "astellas", name: "Astellas", type: "Large pharma", hq: "Tokyo, Japan", site: "https://www.astellas.com", focus: [0.35, 0.45, 0.2], w: 0 },
+  { id: "daiichisankyo", name: "Daiichi Sankyo", type: "Large pharma", hq: "Tokyo, Japan", site: "https://www.daiichisankyo.com", focus: [0.3, 0.5, 0.2], w: 0 },
+  { id: "moderna", name: "Moderna", type: "Mid-size biotech", hq: "Cambridge, MA", site: "https://www.modernatx.com", focus: [0.4, 0.4, 0.2], w: 0 },
+  { id: "merck-kgaa", name: "Merck KGaA", type: "Large pharma", hq: "Darmstadt, Germany", site: "https://www.emdgroup.com", focus: [0.3, 0.5, 0.2], w: 0 },
+  { id: "otsuka", name: "Otsuka", type: "Large pharma", hq: "Tokyo, Japan", site: "https://www.otsuka-us.com", focus: [0.3, 0.5, 0.2], w: 0 },
+  { id: "eisai", name: "Eisai", type: "Large pharma", hq: "Tokyo, Japan", site: "https://www.eisai.com", focus: [0.3, 0.5, 0.2], w: 0 },
+  { id: "ucb", name: "UCB", type: "Large pharma", hq: "Brussels, Belgium", site: "https://www.ucb.com", focus: [0.3, 0.5, 0.2], w: 0 },
+  { id: "csl", name: "CSL", type: "Large pharma", hq: "Melbourne, Australia", site: "https://www.csl.com", focus: [0.25, 0.6, 0.15], w: 0 },
+  { id: "viatris", name: "Viatris", type: "Large pharma", hq: "Canonsburg, PA", site: "https://www.viatris.com", focus: [0.15, 0.7, 0.15], w: 0 },
+  { id: "denali", name: "Denali Therapeutics", type: "Mid-size biotech", hq: "South San Francisco, CA", site: "https://www.denalitherapeutics.com", focus: [0.5, 0.35, 0.15], w: 0 },
+  { id: "cytokinetics", name: "Cytokinetics", type: "Mid-size biotech", hq: "South San Francisco, CA", site: "https://cytokinetics.com", focus: [0.4, 0.45, 0.15], w: 0 },
+  { id: "nurix", name: "Nurix Therapeutics", type: "Mid-size biotech", hq: "San Francisco, CA", site: "https://www.nurixtx.com", focus: [0.55, 0.3, 0.15], w: 0 },
+  { id: "septerna", name: "Septerna", type: "Startup", hq: "South San Francisco, CA", site: "https://www.septerna.com", focus: [0.55, 0.2, 0.25], w: 0 },
+  { id: "maze", name: "Maze Therapeutics", type: "Mid-size biotech", hq: "South San Francisco, CA", site: "https://mazetx.com", focus: [0.45, 0.3, 0.25], w: 0 },
+  { id: "arsenalbio", name: "Arsenal Bioscience", type: "Startup", hq: "South San Francisco, CA", site: "https://arsenalbio.com", focus: [0.55, 0.3, 0.15], w: 0 },
+  { id: "bridgebio", name: "BridgeBio", type: "Mid-size biotech", hq: "Palo Alto, CA", site: "https://bridgebio.com", focus: [0.35, 0.5, 0.15], w: 0 },
+  { id: "czbiohub", name: "Chan Zuckerberg Biohub", type: "Institute", hq: "San Francisco, CA", site: "https://www.czbiohub.org", focus: [0.4, 0.05, 0.55], w: 0 },
+  { id: "calico", name: "Calico Life Sciences", type: "Institute", hq: "South San Francisco, CA", site: "https://www.calicolabs.com", focus: [0.5, 0.1, 0.4], w: 0 },
+  { id: "altos", name: "Altos Labs", type: "Institute", hq: "Redwood City, CA", site: "https://www.altoslabs.com", focus: [0.5, 0.05, 0.45], w: 0 },
+  { id: "genesis", name: "Genesis Molecular AI", type: "Startup", hq: "Burlingame, CA", site: "https://genesistherapeutics.ai", focus: [0.35, 0, 0.65], w: 0 },
+  { id: "chai", name: "Chai Discovery", type: "Startup", hq: "San Francisco, CA", site: "https://www.chaidiscovery.com", focus: [0.3, 0, 0.7], w: 0 },
+  { id: "profluent", name: "Profluent", type: "Startup", hq: "Emeryville, CA", site: "https://www.profluent.bio", focus: [0.35, 0, 0.65], w: 0 },
+  { id: "noetik", name: "Noetik", type: "Startup", hq: "South San Francisco, CA", site: "https://www.noetik.ai", focus: [0.35, 0.05, 0.6], w: 0 },
+  { id: "tahoe", name: "Tahoe Therapeutics", type: "Startup", hq: "South San Francisco, CA", site: "https://www.tahoebio.ai", focus: [0.35, 0.05, 0.6], w: 0 },
+  { id: "atomicai", name: "Atomic AI", type: "Startup", hq: "South San Francisco, CA", site: "https://atomic.ai", focus: [0.4, 0, 0.6], w: 0 },
+  { id: "10x", name: "10x Genomics", type: "Tech", hq: "Pleasanton, CA", site: "https://www.10xgenomics.com", focus: [0.3, 0.05, 0.65], w: 0 },
+  { id: "grail", name: "GRAIL", type: "Tech", hq: "Menlo Park, CA", site: "https://grail.com", focus: [0.15, 0.35, 0.5], w: 0 },
+  { id: "freenome", name: "Freenome", type: "Tech", hq: "Brisbane, CA", site: "https://www.freenome.com", focus: [0.15, 0.3, 0.55], w: 0 },
+  // tracked, but no careers site the scraper can read: postings come in by hand or by import
+  // (EvolutionaryScale's job board wasn't findable; Teva's job search is disallowed by robots.txt)
+  { id: "evolutionaryscale", name: "EvolutionaryScale", type: "Startup", hq: "San Francisco, CA", site: "https://www.evolutionaryscale.ai", focus: [0.35, 0, 0.65], w: 0 },
+  { id: "teva", name: "Teva", type: "Large pharma", hq: "Tel Aviv, Israel", site: "https://www.tevapharm.com", focus: [0.15, 0.7, 0.15], w: 0 },
 ]
 /**
  * The public demo's companies (DEMO_MODE=1): made-up names, no links, so nothing on the demo can be

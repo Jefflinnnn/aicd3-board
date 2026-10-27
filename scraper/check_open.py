@@ -18,6 +18,8 @@ How a posting counts as closed:
   * Workday     the job's detail record is gone (404/410) or no longer accepts applications
   * Greenhouse  the job is gone from the company's public job board API (404)
   * Ashby       the job is no longer in the company's public job board API
+  * Lever       the job is gone from the company's public postings API (404)
+  * Eightfold   the job's record is gone from the site's job API (404/410)
   * other sites the page answers 404/410, redirects away from the job, or says it's no longer open
 Anything else (a block page, a timeout, a server error, a link to the company's home page) counts
 as "unknown": it is never closed automatically. With --apply it goes to the staff review queue
@@ -113,6 +115,24 @@ def greenhouse_api_url(url: str, company: str) -> str | None:
     return None
 
 
+LEVER_URL = re.compile(r"^https://jobs\.lever\.co/(?P<site>[^/]+)/(?P<id>[0-9a-f-]{36})", re.I)
+# Eightfold job pages (talent.bayer.com/careers/job/562949978740495) are app shells that answer 200 either way
+EIGHTFOLD_SITES = {urlparse(cfg["base"]).netloc: cfg["domain"] for cfg in pi.COMPANIES.values() if cfg.get("platform") == "eightfold"}
+EIGHTFOLD_URL = re.compile(r"^https://(?P<host>[^/]+)/careers/job/(?P<id>\d+)", re.I)
+
+
+def lever_api_url(url: str) -> str | None:
+    m = LEVER_URL.match(url)
+    return f"https://api.lever.co/v0/postings/{m.group('site')}/{m.group('id')}" if m else None
+
+
+def eightfold_api_url(url: str) -> str | None:
+    m = EIGHTFOLD_URL.match(url)
+    if not m or m.group("host").lower() not in EIGHTFOLD_SITES:
+        return None
+    return f"https://{m.group('host')}/api/apply/v2/jobs/{m.group('id')}?domain={EIGHTFOLD_SITES[m.group('host').lower()]}"
+
+
 ASHBY_URL = re.compile(r"^https://jobs\.ashbyhq\.com/(?P<org>[^/]+)/(?P<id>[0-9a-f-]{36})", re.I)
 _ashby_boards: dict[str, set[str]] = {}
 
@@ -158,6 +178,22 @@ def check(client: pi.PoliteClient, p: dict) -> Result:
                 return res("unknown", "the Ashby job board came back empty")
             return res("open", "on the Ashby job board") if m.group("id") in ids else res("closed", "gone from the Ashby job board")
 
+        api = lever_api_url(url)
+        if api:
+            r = client.get(api, headers={"Accept": "application/json"})
+            if r.status_code == 404:
+                return res("closed", "gone from the Lever postings API")
+            return res("open" if r.status_code == 200 else "unknown", f"Lever answered {r.status_code}")
+
+        api = eightfold_api_url(url)
+        if api:
+            r = client.get(api, headers={"Accept": "application/json"})
+            if r.status_code in (404, 410):
+                return res("closed", f"Eightfold job API answered {r.status_code}")
+            if r.status_code != 200:
+                return res("unknown", f"Eightfold job API answered {r.status_code}")
+            return res("open", "Eightfold posting is live") if (r.json() or {}).get("id") else res("unknown", "Eightfold returned no posting")
+
         api = greenhouse_api_url(url, p.get("company", ""))
         if api:
             r = client.get(api, headers={"Accept": "application/json"})
@@ -194,7 +230,7 @@ def site_key(p: dict) -> str:
     url = p.get("url") or ""
     if ASHBY_URL.match(url):
         return "api.ashbyhq.com"
-    return urlparse(workday_detail_url(url) or greenhouse_api_url(url, p.get("company", "")) or url).netloc
+    return urlparse(workday_detail_url(url) or lever_api_url(url) or greenhouse_api_url(url, p.get("company", "")) or url).netloc
 
 
 def check_all(postings: list[dict], client: pi.PoliteClient, workers: int) -> list[Result]:

@@ -894,3 +894,81 @@ class FullTimeRoleMode(unittest.TestCase):
         self.assertEqual(pi.min_years("Requires 8+ years of experience"), 8)
         self.assertEqual(pi.min_years("BS and 6-8 years of pharmaceutical industry experience"), 6)
         self.assertIsNone(pi.min_years("Founded 10 years ago"))
+
+
+class AddedOct2026(unittest.TestCase):
+    """The 31 companies added on 26 Oct 2026: their configs, and the Lever and Eightfold adapters (fixtures mirror
+    api.lever.co/v0/postings/tahoebio-ai and talent.bayer.com/api/apply/v2/jobs as fetched that day)."""
+
+    def test_every_company_is_known_to_the_app_and_the_refresh_picture(self):
+        import os
+        root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+        data = open(os.path.join(root, "lib", "data.ts"), encoding="utf8").read()
+        routes = open(os.path.join(root, "components", "RefreshRoutes.tsx"), encoding="utf8").read()
+        app_ids = set(re.findall(r'\{ id: "([^"]+)", name:', data[:data.index("DEMO_COMPANIES")]))
+        for name, cfg in pi.COMPANIES.items():
+            self.assertIn(cfg["id"], app_ids, f"{name}: add it to COMPANIES in lib/data.ts, or imports are refused")
+            self.assertIn(f'"{name}"', routes, f"{name}: add it to a group in components/RefreshRoutes.tsx")
+            self.assertIn(cfg["platform"], pi.SCRAPERS, name)
+
+    def test_config(self):
+        want = {"Johnson & Johnson": ("workday", ("jj", "wd5", "JJ")), "Moderna": ("workday", ("modernatx", "wd1", "M_tx")),
+                "Denali Therapeutics": ("workday", ("dnli", "wd1", "Internships")),
+                "Maze Therapeutics": ("greenhouse", "mazetherapeutics"), "Calico Life Sciences": ("greenhouse", "calicolabs"),
+                "Genesis Molecular AI": ("ashby", "genesis-molecular-ai"), "Tahoe Therapeutics": ("lever", "tahoebio-ai"),
+                "GRAIL": ("lever", "grailbio"), "Bayer": ("eightfold", "bayer.com"), "Astellas": ("successfactors", "https://careers.astellas.com")}
+        for name, (platform, where) in want.items():
+            cfg = pi.COMPANIES[name]
+            got = (cfg["boards"][0][:3] if platform == "workday" else cfg.get("token") or cfg.get("org") or cfg.get("site")
+                   or cfg.get("domain") or cfg.get("base"))
+            self.assertEqual((cfg["platform"], got), (platform, where), name)
+        self.assertEqual(pi.COMPANIES["Denali Therapeutics"]["boards"][0][3], {"all": True})   # its student-only board
+        self.assertEqual(len({c["id"] for c in pi.COMPANIES.values()}), len(pi.COMPANIES))   # ids are unique
+
+    def test_lever(self):
+        body = json.dumps([
+            {"id": "8fe3e406-050f-498c-8f75-3cb780dec092", "text": "Machine Learning Intern, Summer 2027",
+             "categories": {"commitment": "Intern", "location": "South San Francisco", "team": "ML",
+                            "allLocations": ["South San Francisco"]},
+             "country": "US", "workplaceType": "onsite", "createdAt": 1790000000000,
+             "description": "<div>Build single-cell models.</div>",
+             "lists": [{"text": "What you'll do", "content": "<li>Train perturbation models</li>"}],
+             "additional": "<div>The pay range is $40 - $50 per hour.</div>",
+             "hostedUrl": "https://jobs.lever.co/tahoebio-ai/8fe3e406-050f-498c-8f75-3cb780dec092"},
+            {"id": "a", "text": "Research Associate, Summer", "categories": {"commitment": "Intern", "location": "Boston, MA"},
+             "hostedUrl": "https://jobs.lever.co/x/a"},
+            {"id": "b", "text": "Senior Machine Learning Scientist", "categories": {"commitment": "Full-Time"},
+             "hostedUrl": "https://jobs.lever.co/x/b"}])
+        client = FakeClient(lambda m, u, k: make_resp(u, 200, body))
+        got = pi.scrape_lever(client, "Tahoe Therapeutics", {"site": "tahoebio-ai"}, True)
+        self.assertEqual(client.calls[0][1], "https://api.lever.co/v0/postings/tahoebio-ai")
+        self.assertEqual(sorted(p.title for p in got), ["Machine Learning Intern, Summer 2027", "Research Associate, Summer"])
+        p = next(p for p in got if p.title.startswith("Machine"))
+        self.assertTrue(pi.is_us(p))   # "South San Francisco" alone has no state; Lever's country says US
+        rec = pi.to_import_record(p)
+        self.assertEqual((rec["first_seen"], p.pay, p.req_id), ("2026-09-21", "$40 - $50 per hour", "8fe3e406-050f-498c-8f75-3cb780dec092"))
+        self.assertEqual(rec["responsibilities"], ["Train perturbation models"])
+
+    def test_eightfold(self):
+        def position(i, name, unit="Pharmaceuticals", loc="Berkeley,California,United States"):
+            return {"id": 562949978740000 + i, "name": name, "posting_name": name, "location": loc, "locations": [loc],
+                    "business_unit": unit, "t_create": 1791849600, "ats_job_id": str(892000 + i), "display_job_id": str(892000 + i),
+                    "work_location_option": "hybrid", "canonicalPositionUrl": f"https://talent.bayer.com/careers/job/{562949978740000 + i}"}
+        pages = {0: {"count": 12, "positions": [position(i, f"Data Science Intern {i}") for i in range(9)]
+                     + [position(9, "Engineering Technician Intern", "Crop Science", "Chesterfield,Missouri,United States")]},
+                 10: {"count": 12, "positions": [position(10, "Statistician Intern"), position(11, "Associate Director, Biostatistics")]}}
+
+        def handler(m, u, k):
+            if "/api/apply/v2/jobs/" in u:
+                return make_resp(u, 200, json.dumps({"id": 1, "job_description": "<p>Responsibilities:</p><ul><li>Fit PK models</li></ul>"}))
+            return make_resp(u, 200, json.dumps(pages[k["params"]["start"]]))
+        client = FakeClient(handler)
+        cfg = {"base": "https://talent.bayer.com", "domain": "bayer.com", "terms": ["intern"], "skip_business_units": ["Crop Science"]}
+        got = pi.scrape_eightfold(client, "Bayer", cfg, True)
+        self.assertEqual(len(got), 10)   # 11 interns, less the Crop Science one; the director isn't an internship
+        self.assertNotIn("Engineering Technician Intern", [p.title for p in got])
+        p = next(p for p in got if p.title == "Statistician Intern")
+        self.assertEqual((p.locations, p.posted, p.req_id), (["Berkeley, California, United States"], "2026-10-13", "892010"))
+        self.assertEqual(pi.to_import_record(p)["mode"], "Hybrid")
+        self.assertEqual(pi.to_import_record(p)["responsibilities"], ["Fit PK models"])
+        self.assertTrue(all(c[2]["params"]["domain"] == "bayer.com" for c in client.calls if "/api/apply/v2/jobs" in c[1]))

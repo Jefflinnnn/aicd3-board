@@ -148,7 +148,7 @@ The `/scrape-internships` skill and the `posting-extractor` subagent live in you
 
 The skill (`.claude/skills/scrape-internships/SKILL.md`, local) runs these steps:
 
-1. `scraper/pharma_internships.py --details --workers 5`. Five companies run side by side, each site at its own polite pace, which takes roughly 10–15 minutes.
+1. `scraper/pharma_internships.py --details --workers 5`. Five companies run side by side, each site at its own polite pace. It took roughly 10–15 minutes for the first 22 companies; with 53 expect it to take about twice as long or more.
 2. It splits the results into batches.
 3. It starts several `posting-extractor` subagents (`.claude/agents/`, local) at once. They write a summary, responsibilities, qualifications, category, term and work mode for each posting.
 4. It merges their output.
@@ -165,7 +165,7 @@ python3 scraper/check_open.py            # report: still open / closed / needs a
 python3 scraper/check_open.py --apply    # mark the closed ones "Taken down", send the unsure ones to review
 ```
 
-It reads the open postings from `/api/ingest/open`, asks Workday's detail record, Greenhouse's or Ashby's job board API, or the posting page itself, at the same polite pace as the scraper, and sends closed ones to `/api/ingest/close`. A posting it can't confirm either way (a bot check, a timeout, a server error) goes to the staff review queue through `/api/ingest/flag`, marked "Couldn't confirm it's still open" with the reason: Approve puts it back on the job board, Reject keeps it off. If every posting on one site fails (the whole site is down), those stay on the board and are only reported; add `--flag-site-outages` to send them to review anyway. Staff can reopen a closed posting from the Admin page if a check was wrong; every closure and flag is in the audit log.
+It reads the open postings from `/api/ingest/open`, asks Workday's detail record, Greenhouse's, Ashby's, Lever's or Eightfold's job API, or the posting page itself, at the same polite pace as the scraper, and sends closed ones to `/api/ingest/close`. A posting it can't confirm either way (a bot check, a timeout, a server error) goes to the staff review queue through `/api/ingest/flag`, marked "Couldn't confirm it's still open" with the reason: Approve puts it back on the job board, Reject keeps it off. If every posting on one site fails (the whole site is down), those stay on the board and are only reported; add `--flag-site-outages` to send them to review anyway. Staff can reopen a closed posting from the Admin page if a check was wrong; every closure and flag is in the audit log.
 
 On Bedrock, pin the model so the subagents use it too (they inherit it):
 
