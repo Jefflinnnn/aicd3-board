@@ -145,3 +145,21 @@ class Locations(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LeverAndEightfold(unittest.TestCase):
+    LEVER = "https://jobs.lever.co/tahoebio-ai/8fe3e406-050f-498c-8f75-3cb780dec092"
+    EIGHTFOLD = "https://talent.bayer.com/careers/job/562949978740495"
+
+    def test_urls(self):
+        self.assertEqual(co.lever_api_url(self.LEVER),
+                         "https://api.lever.co/v0/postings/tahoebio-ai/8fe3e406-050f-498c-8f75-3cb780dec092")
+        self.assertEqual(co.eightfold_api_url(self.EIGHTFOLD),
+                         "https://talent.bayer.com/api/apply/v2/jobs/562949978740495?domain=bayer.com")
+        self.assertIsNone(co.eightfold_api_url("https://example.com/careers/job/1"))   # not a configured Eightfold site
+
+    def test_checks(self):
+        run = lambda url, status, body="{}": co.check(FakeClient(lambda m, u, k: make_resp(u, status, body)), posting(url, "x")).status
+        self.assertEqual((run(self.LEVER, 200), run(self.LEVER, 404), run(self.LEVER, 503)), ("open", "closed", "unknown"))
+        self.assertEqual(run(self.EIGHTFOLD, 200, json.dumps({"id": 562949978740495})), "open")
+        self.assertEqual((run(self.EIGHTFOLD, 404), run(self.EIGHTFOLD, 200, "{}"), run(self.EIGHTFOLD, 500)), ("closed", "unknown", "unknown"))
