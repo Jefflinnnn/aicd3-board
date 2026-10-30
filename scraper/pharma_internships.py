@@ -1,19 +1,20 @@
 #!/usr/bin/env python3
 """
-pharma_internships.py - collect internship / co-op postings from 53 pharma, biotech and AI drug
+pharma_internships.py - collect internship / co-op postings from 61 pharma, biotech and AI drug
 discovery career sites using the public JSON feeds and pages that power those sites.
 
 Platforms covered (verified October 2026 unless marked otherwise in COMPANIES):
   * Workday "cxs" JSON API  - Pfizer, Merck/MSD, AstraZeneca, BMS, Sanofi, GSK, Vertex,
                               Regeneron, Genentech (Roche), Amgen, Eli Lilly, Takeda,
                               Gilead, Novartis, Biogen, NVIDIA, Johnson & Johnson, Moderna,
-                              Otsuka, Eisai, CSL, Viatris, Denali, Cytokinetics
+                              Eisai, CSL, Viatris, Denali, Cytokinetics, Thermo Fisher, Lonza,
+                              Catalent, IQVIA, Labcorp, Abbott, Zoetis, BeiGene
   * Greenhouse Job Board API - Revolution Medicines, Recursion, Generate:Biomedicines, Nurix,
                               Septerna, Maze, BridgeBio, Biohub, Calico, Altos Labs, Profluent,
-                              Noetik, Atomic AI, Freenome
+                              Noetik, Atomic AI, Freenome, Lila Sciences, Ginkgo Bioworks
   * Ashby posting API        - insitro, Genesis Molecular AI, Chai Discovery
   * Lever postings API       - Arsenal Bioscience, Tahoe Therapeutics, GRAIL
-  * Eightfold job search API - Bayer, 10x Genomics
+  * Eightfold job search API - Bayer
   * SAP SuccessFactors CSB   - Boehringer Ingelheim, Novo Nordisk, Astellas, Daiichi Sankyo
                               (server-rendered search pages)
   * Phenom career sites      - Merck KGaA (EMD Serono), UCB
@@ -154,7 +155,6 @@ COMPANIES: dict[str, dict] = {
     "Moderna":              {"id": "moderna", "platform": "workday", "boards": [("modernatx", "wd1", "M_tx")]},
     "Merck KGaA":           {"id": "merck-kgaa", "platform": "phenom", "base": "https://careers.emdgroup.com", "path": "/us/en",   # unverified
                              "terms": ["intern", "internship", "co-op"]},
-    "Otsuka":               {"id": "otsuka", "platform": "workday", "boards": [("vhr-otsuka", "wd1", "External")]},
     "Eisai":                {"id": "eisai", "platform": "workday", "boards": [("eisai", "wd5", "eisai")]},
     "UCB":                  {"id": "ucb", "platform": "phenom", "base": "https://careers.ucb.com", "path": "/us/en",   # unverified
                              "terms": ["intern", "internship", "co-op"]},
@@ -182,10 +182,25 @@ COMPANIES: dict[str, dict] = {
     "Tahoe Therapeutics":   {"id": "tahoe", "platform": "lever", "site": "tahoebio-ai"},
     "Atomic AI":            {"id": "atomicai", "platform": "greenhouse", "token": "atomai"},
     # Genomics
-    "10x Genomics":         {"id": "10x", "platform": "eightfold", "base": "https://careers.10xgenomics.com",   # unverified
-                             "domain": "10xgenomics.com"},
     "GRAIL":                {"id": "grail", "platform": "lever", "site": "grailbio"},
     "Freenome":             {"id": "freenome", "platform": "greenhouse", "token": "freenome"},
+
+    # Added October 2026 after probing the public job feeds of life-science employers for internship-titled
+    # postings (boards and tenants below returned live internships on 2026-10-30).
+    # Life-science tools, CDMOs and CROs
+    "Thermo Fisher Scientific": {"id": "thermofisher", "platform": "workday",
+                                 "boards": [("thermofisher", "wd5", "ThermoFisherCareers")]},
+    "Lonza":                {"id": "lonza", "platform": "workday", "boards": [("lonza", "wd3", "Lonza_Careers")]},
+    "Catalent":             {"id": "catalent", "platform": "workday", "boards": [("catalent", "wd1", "External")]},
+    "IQVIA":                {"id": "iqvia", "platform": "workday", "boards": [("iqvia", "wd1", "IQVIA")]},
+    "Labcorp":              {"id": "labcorp", "platform": "workday", "boards": [("labcorp", "wd1", "External")]},
+    # Healthcare, animal health and biotech
+    "Abbott":               {"id": "abbott", "platform": "workday", "boards": [("abbott", "wd5", "abbottcareers")]},
+    "Zoetis":               {"id": "zoetis", "platform": "workday", "boards": [("zoetis", "wd5", "zoetis")]},
+    "BeiGene":              {"id": "beigene", "platform": "workday", "boards": [("beigene", "wd5", "BeiGene")]},
+    # AI / synthetic biology
+    "Lila Sciences":        {"id": "lila", "platform": "greenhouse", "token": "lilasciences"},
+    "Ginkgo Bioworks":      {"id": "ginkgo", "platform": "greenhouse", "token": "ginkgobioworks"},
 }
 
 # Titles that count as internships. Letter boundaries keep out "International"/"Internal"

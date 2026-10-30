@@ -197,6 +197,16 @@ export const COMPANIES: Company[] = [
   { id: "10x", name: "10x Genomics", type: "Tech", hq: "Pleasanton, CA", site: "https://www.10xgenomics.com", focus: [0.3, 0.05, 0.65], w: 0 },
   { id: "grail", name: "GRAIL", type: "Tech", hq: "Menlo Park, CA", site: "https://grail.com", focus: [0.15, 0.35, 0.5], w: 0 },
   { id: "freenome", name: "Freenome", type: "Tech", hq: "Brisbane, CA", site: "https://www.freenome.com", focus: [0.15, 0.3, 0.55], w: 0 },
+  { id: "thermofisher", name: "Thermo Fisher Scientific", type: "Large pharma", hq: "Waltham, MA", site: "https://www.thermofisher.com", focus: [0.3, 0.4, 0.3], w: 0 },
+  { id: "lonza", name: "Lonza", type: "Large pharma", hq: "Basel, Switzerland", site: "https://www.lonza.com", focus: [0.2, 0.65, 0.15], w: 0 },
+  { id: "catalent", name: "Catalent", type: "Large pharma", hq: "Somerset, NJ", site: "https://www.catalent.com", focus: [0.15, 0.7, 0.15], w: 0 },
+  { id: "iqvia", name: "IQVIA", type: "Large pharma", hq: "Durham, NC", site: "https://www.iqvia.com", focus: [0.05, 0.4, 0.55], w: 0 },
+  { id: "labcorp", name: "Labcorp", type: "Large pharma", hq: "Burlington, NC", site: "https://www.labcorp.com", focus: [0.2, 0.5, 0.3], w: 0 },
+  { id: "abbott", name: "Abbott", type: "Large pharma", hq: "Abbott Park, IL", site: "https://www.abbott.com", focus: [0.25, 0.5, 0.25], w: 0 },
+  { id: "zoetis", name: "Zoetis", type: "Large pharma", hq: "Parsippany, NJ", site: "https://www.zoetis.com", focus: [0.3, 0.55, 0.15], w: 0 },
+  { id: "beigene", name: "BeiGene", type: "Mid-size biotech", hq: "Cambridge, MA", site: "https://www.beonemedicines.com", focus: [0.45, 0.4, 0.15], w: 0 },
+  { id: "lila", name: "Lila Sciences", type: "Startup", hq: "Cambridge, MA", site: "https://www.lila.ai", focus: [0.4, 0.05, 0.55], w: 0 },
+  { id: "ginkgo", name: "Ginkgo Bioworks", type: "Tech", hq: "Boston, MA", site: "https://www.ginkgobioworks.com", focus: [0.4, 0.1, 0.5], w: 0 },
   // tracked, but no careers site the scraper can read: postings come in by hand or by import
   // (EvolutionaryScale's job board wasn't findable; Teva's job search is disallowed by robots.txt)
   { id: "evolutionaryscale", name: "EvolutionaryScale", type: "Startup", hq: "San Francisco, CA", site: "https://www.evolutionaryscale.ai", focus: [0.35, 0, 0.65], w: 0 },

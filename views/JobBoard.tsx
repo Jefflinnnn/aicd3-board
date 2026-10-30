@@ -613,7 +613,7 @@ export default function JobBoard() {
                                 </Tooltip>
                               )}
                             </div>
-                            {!settings.compact && <div className="text-xs text-muted-foreground">{j.term}, {j.mode.toLowerCase().startsWith("remote") ? "remote" : j.mode.toLowerCase()}</div>}
+                            {!settings.compact && <div className="text-xs text-muted-foreground">{[j.term, j.mode.toLowerCase().startsWith("remote") ? "remote" : j.mode.toLowerCase()].filter(Boolean).join(", ")}</div>}
                           </td>
                           <td className="px-2.5">{c.name}</td>
                           <td className="px-2.5"><LocationCell job={j} /></td>
