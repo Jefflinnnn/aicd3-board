@@ -82,7 +82,11 @@ COMPANIES: dict[str, dict] = {
     "Pfizer":               {"id": "pfizer", "platform": "workday", "boards": [("pfizer", "wd1", "PfizerCareers")],
                              "terms": ["intern", "internship", "co-op", "undergraduate", "summer associate",
                                        "bachelorstage", "pflichtpraktikant"]},
-    "Merck":                {"id": "merck", "platform": "workday", "boards": [("msd", "wd5", "SearchJobs")]},
+    "Merck":                {"id": "merck", "platform": "workday", "boards": [("msd", "wd5", "SearchJobs")],
+                             # jobs.merck.com (Phenom) lists the same jobs; used when Workday refuses us (its
+                             # "maintenance" redirect has come up while jobs.merck.com was up and listing jobs)
+                             "fallback": {"platform": "phenom", "base": "https://jobs.merck.com", "path": "/us/en",
+                                          "terms": ["intern", "internship", "co-op"]}},
     "AbbVie":               {"id": "abbvie", "platform": "abbvie_sitemap",
                              "sitemap": "https://careers.abbvie.com/sitemap.xml",
                              # used by default (robots.txt disallows /jobs?*; --respect-robots skips it), which
@@ -385,7 +389,10 @@ class PoliteClient:
             resp.encoding = "utf-8"
         head = resp.text[:20000].lower() if "html" in ctype else ""
         if any(m in head or m in (resp.url or "").lower() for m in MAINTENANCE_MARKERS):
-            raise UnavailableError(f"{resp.request.method} {resp.url} -> the site is down for maintenance; try again later.")
+            # a real outage, or the site turning us away (Workday sent Merck's requests to this page while
+            # jobs.merck.com was up): don't claim which
+            raise UnavailableError(f"{resp.request.method} {resp.url} -> the site answered with a maintenance page. "
+                                   "That can be a real outage or the site refusing this scraper; check the careers site in a browser.")
         # A real challenge page: Cloudflare's "Just a moment..." interstitial (it loads
         # /cdn-cgi/challenge-platform/.../orchestrate/... and sets cf-mitigated), PerimeterX or Incapsula block
         # pages. Cloudflare also adds a background script (/cdn-cgi/challenge-platform/scripts/jsd/main.js) to
@@ -1437,7 +1444,8 @@ def scrape_phenom(client: PoliteClient, company: str, cfg: dict, details: bool, 
             found = (parse_phenom_ddo(r.text).get("eagerLoadRefineSearch") or {})
             jobs = ((found.get("data") or {}).get("jobs")) or []
             for j in jobs:
-                title, url = clean(j.get("title")), j.get("jobUrl") or ""
+                # some sites (jobs.merck.com) leave jobUrl empty; /job/<jobSeqNo> opens the same page
+                title, url = clean(j.get("title")), j.get("jobUrl") or (f"{base}{path}/job/{j['jobSeqNo']}" if j.get("jobSeqNo") else "")
                 if not url or url in out or not wanted(title):
                     continue
                 locs = _phenom_locations(j)
@@ -1715,7 +1723,7 @@ def run(companies: list[str], details: bool, us_only: bool, client: PoliteClient
                     tell(name, "done", len(found), via.strip())
                     return found
                 except UnavailableError as e:
-                    problems.append("UNAVAILABLE - down for maintenance, try later")
+                    problems.append("UNAVAILABLE - the site sent a maintenance page (an outage, or it is refusing us)")
                     log.warning("   %s: %s", name, e)
                 except BlockedError as e:
                     problems.append("BLOCKED - manual step needed")

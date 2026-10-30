@@ -455,6 +455,18 @@ class Phenom(unittest.TestCase):
         self.assertIn("• Build agents", genai.description)
         self.assertEqual(pi.to_import_record(genai)["locations"], ["South San Francisco, CA"])
 
+    def test_job_without_job_url_gets_its_link_from_job_seq_no(self):
+        # jobs.merck.com leaves jobUrl empty; /job/<jobSeqNo> opens the page
+        search = phenom_page({"eagerLoadRefineSearch": {"totalHits": 1, "data": {"jobs": [
+            {"reqId": "R413328", "jobSeqNo": "MERCUSR413328ENUS", "jobUrl": None, "title": "2027 Future Talent Program - Intern",
+             "multi_location": ["Rahway, New Jersey, United States of America"]}]}}})
+        cfg = pi.COMPANIES["Merck"]["fallback"]
+        got = pi.scrape_phenom(FakeClient(lambda m, url, kw: make_resp(url, 200, search, "text/html")), "Merck", cfg, False)
+        self.assertEqual([(p.req_id, p.url) for p in got], [("R413328", "https://jobs.merck.com/us/en/job/MERCUSR413328ENUS")])
+
+    def test_merck_falls_back_to_its_careers_site(self):
+        self.assertEqual(pi.COMPANIES["Merck"]["fallback"]["base"], "https://jobs.merck.com")
+
 
 class Maintenance(unittest.TestCase):
     def test_workday_down_falls_back_to_careers_site(self):
