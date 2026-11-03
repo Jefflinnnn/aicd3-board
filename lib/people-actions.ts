@@ -139,6 +139,7 @@ export async function removePerson(userId: string) {
     if (!t) return null
     if (t.role === "admin" && t.status === "active") await assertAdminsRemain(tx, id)
     await tx.jobStatus.deleteMany({ where: { userId: id } })
+    await tx.application.deleteMany({ where: { userId: id } })
     await tx.jobNote.deleteMany({ where: { userId: id } })
     await tx.companyRequest.deleteMany({ where: { userId: id } })
     await tx.issueReport.deleteMany({ where: { userId: id } })

@@ -59,7 +59,8 @@ model Profile {
   createdAt DateTime     @default(now())
   updatedAt DateTime     @updatedAt
 
-  statuses JobStatus[]
+  statuses     JobStatus[]
+  applications Application[]
   notes    JobNote[]
   requests CompanyRequest[]
   reports  IssueReport[]
@@ -142,6 +143,28 @@ model JobStatus {
   posting Posting @relation(fields: [postingId], references: [id], onDelete: Cascade)
 
   @@id([userId, postingId])
+}
+
+/// A lasting record that a student applied to a role, for staff to see who applied where.
+/// Unlike JobStatus it has no link to Posting: postings are deleted for good (bin purge, "Delete for
+/// good", stale queue drops) and the record must outlive them, so it keeps its own copy of the
+/// title, company and link. It goes away when the student un-marks the role or is removed.
+model Application {
+  userId    String
+  /// the posting's id when they applied; may no longer exist
+  postingId String
+  title     String
+  company   String
+  location  String   @default("")
+  url       String   @default("")
+  /// the posting's deadline when they applied (YYYY-MM-DD); "" = rolling
+  deadline  String   @default("")
+  appliedAt DateTime @default(now())
+
+  user Profile @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, postingId])
+  @@index([appliedAt])
 }
 
 model JobNote {
