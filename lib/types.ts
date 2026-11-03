@@ -61,6 +61,20 @@ export interface Person {
 }
 export interface Invite { email: string; role: Role; createdAt: number }
 
+/** Whether the role a student applied to can still be applied to: still open, past its deadline or taken down, or deleted from the board. */
+export type AppliedPostingState = "open" | "expired" | "removed"
+export interface AppliedRole {
+  postingId: string
+  title: string
+  company: string
+  location: string
+  url: string
+  deadline: string
+  appliedAt: number
+  state: AppliedPostingState
+}
+export interface StudentApplications { id: string; name: string | null; email: string; status: Person["status"]; applications: AppliedRole[] }
+
 /** Live progress the pipeline reports while it runs (scraper/progress.py), drawn as the refresh Sankey. */
 export interface RunProgress {
   /** when the pipeline last reported (ms) */

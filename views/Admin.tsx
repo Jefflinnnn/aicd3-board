@@ -17,6 +17,7 @@ import { CatChip, DeadlineCell, LocationCell, PageHead, Panel, StatusPill } from
 import { ImportDialog, JobForm } from "@/views/AdminForms"
 import { ReviewQueue } from "@/views/ReviewQueue"
 import { People } from "@/views/People"
+import { Applications } from "@/views/Applications"
 import { Refresh } from "@/views/Refresh"
 import { reviewFlags, stage } from "@/lib/review"
 import { cn } from "@/lib/utils"
@@ -248,6 +249,8 @@ export default function Admin() {
       <ReviewQueue flash={flash === "admin-review"} onEdit={(sj) => openForm(sj, true)} />
 
       <People flash={flash === "admin-people"} />
+
+      <Applications flash={flash === "admin-applications"} />
 
       <Panel
         id="admin-chart"

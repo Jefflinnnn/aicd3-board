@@ -221,18 +221,37 @@ export async function setStatus(ids: string[], s: MyStatus | null) {
   const status = z.enum(["saved", "applied"]).nullable().parse(s)
   const prisma = db()
   if (!status) {
-    await prisma.jobStatus.deleteMany({ where: { userId: v.id, postingId: { in: list } } })
+    await prisma.$transaction([
+      prisma.jobStatus.deleteMany({ where: { userId: v.id, postingId: { in: list } } }),
+      prisma.application.deleteMany({ where: { userId: v.id, postingId: { in: list } } }),
+    ])
     return
   }
   // only postings this person can see
-  const visible = await prisma.posting.findMany({ where: { id: { in: list }, ...visibleTo(v) }, select: { id: true } })
-  await prisma.$transaction(visible.map((p) =>
-    prisma.jobStatus.upsert({
-      where: { userId_postingId: { userId: v.id, postingId: p.id } },
-      create: { userId: v.id, postingId: p.id, status },
-      update: { status },
-    })
-  ))
+  const visible = await prisma.posting.findMany({ where: { id: { in: list }, ...visibleTo(v) }, select: { id: true, title: true, company: true, location: true, url: true, deadline: true } })
+  await prisma.$transaction(async (tx) => {
+    for (const p of visible) {
+      await tx.jobStatus.upsert({
+        where: { userId_postingId: { userId: v.id, postingId: p.id } },
+        create: { userId: v.id, postingId: p.id, status },
+        update: { status },
+      })
+    }
+    // Staff see who applied where, and keep seeing it after the posting is gone, so "applied" is also written
+    // to Application with a copy of the posting; moving a role back to saved takes it out again.
+    if (status !== "applied") {
+      await tx.application.deleteMany({ where: { userId: v.id, postingId: { in: visible.map((p) => p.id) } } })
+      return
+    }
+    for (const p of visible) {
+      const snap = { title: p.title, company: p.company, location: p.location, url: p.url, deadline: p.deadline ? p.deadline.toISOString().slice(0, 10) : "" }
+      await tx.application.upsert({
+        where: { userId_postingId: { userId: v.id, postingId: p.id } },
+        create: { userId: v.id, postingId: p.id, ...snap },
+        update: snap, // appliedAt stays as the first time they marked it
+      })
+    }
+  })
 }
 
 export async function setNote(id: string, text: string) {

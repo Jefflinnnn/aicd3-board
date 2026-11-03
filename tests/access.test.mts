@@ -48,6 +48,7 @@ const user = (id: string, email: string, emailVerified = true): FakeUser => ({ i
 
 const A = await import("../lib/actions")
 const P = await import("../lib/people-actions")
+const AP = await import("../lib/application-actions")
 const R = await import("../lib/refresh-actions")
 const RS = await import("../lib/server/refresh")
 const { db } = await import("../lib/server/db")
@@ -68,7 +69,7 @@ const job = (id: string, extra: Record<string, unknown> = {}) => ({
 const rejects = (p: Promise<unknown>, re = /permission|approval|sign in|access/i) => assert.rejects(p, re)
 
 async function wipe() {
-  for (const t of ["ScrapeRun", "JobStatus", "JobNote", "CompanyRequest", "IssueReport", "Posting", "AccessGrant", "Profile", "SiteMeta", "AuditLog"])
+  for (const t of ["ScrapeRun", "Application", "JobStatus","JobNote", "CompanyRequest", "IssueReport", "Posting", "AccessGrant", "Profile", "SiteMeta", "AuditLog"])
     await prisma.$executeRawUnsafe(`DELETE FROM "${t}"`)
 }
 
@@ -929,5 +930,67 @@ describe("public demo (DEMO_MODE=1)", () => {
       delete process.env.DEMO_MODE
     }
     assert.equal(await prisma.posting.count({ where: { id: "demo-1" } }), 0)
+  })
+})
+
+describe("who applied to what", () => {
+  before(async () => {
+    await wipe()
+    await prisma.profile.create({ data: { id: staff.id, email: staff.email, emailVerified: true, role: "staff", status: "active" } })
+    as(staff)
+    await A.saveJobs([job("ap1"), job("ap2"), job("ap3")])
+  })
+
+  it("staff see applications; students can't", async () => {
+    as(alice)
+    await A.setStatus(["ap1", "ap2"], "applied")
+    await A.setStatus(["ap3"], "saved")
+    as(bob)
+    await A.setStatus(["ap1"], "applied")
+    await rejects(AP.listApplications())
+    as(staff)
+    const { students } = await AP.listApplications()
+    const a = students.find((s) => s.id === alice.id)!
+    assert.deepEqual(a.applications.map((x) => x.postingId).sort(), ["ap1", "ap2"])   // saved is not applied
+    assert.equal(a.applications[0].title, "Data Science Intern")
+    assert.equal(students.find((s) => s.id === bob.id)?.applications.length, 1)
+  })
+
+  it("an application is still listed after its posting is taken down, binned, and deleted for good", async () => {
+    as(staff)
+    await A.saveJobs([{ ...job("ap1"), closed: true } as never])
+    let r = await AP.listApplications()
+    assert.equal(r.students.find((s) => s.id === alice.id)!.applications.find((x) => x.postingId === "ap1")?.state, "expired")
+    await A.moveToBin(["ap1"])
+    r = await AP.listApplications()
+    assert.equal(r.students.find((s) => s.id === alice.id)!.applications.find((x) => x.postingId === "ap1")?.state, "removed")
+    await A.deleteForever(["ap1"])
+    assert.equal(await prisma.posting.count({ where: { id: "ap1" } }), 0)
+    assert.equal(await prisma.jobStatus.count({ where: { postingId: "ap1" } }), 0)   // the student's own list entry is gone with it
+    r = await AP.listApplications()
+    const kept = r.students.find((s) => s.id === alice.id)!.applications.find((x) => x.postingId === "ap1")
+    assert.equal(kept?.state, "removed")
+    assert.equal(kept?.title, "Data Science Intern")   // its own copy of the role
+    assert.equal(r.students.find((s) => s.id === bob.id)?.applications.length, 1)
+  })
+
+  it("un-marking or moving back to saved takes it off the list", async () => {
+    as(alice)
+    await A.setStatus(["ap2"], "saved")
+    as(staff)
+    const r = await AP.listApplications()
+    assert.ok(!r.students.find((s) => s.id === alice.id)!.applications.some((x) => x.postingId === "ap2"))
+  })
+
+  it("applying again keeps the first date; removing a person clears their applications", async () => {
+    as(alice)
+    await A.setStatus(["ap2"], "applied")
+    const first = (await prisma.application.findUnique({ where: { userId_postingId: { userId: alice.id, postingId: "ap2" } } }))!.appliedAt
+    await A.setStatus(["ap2"], "applied")
+    assert.equal((await prisma.application.findUnique({ where: { userId_postingId: { userId: alice.id, postingId: "ap2" } } }))!.appliedAt.getTime(), first.getTime())
+    await prisma.profile.update({ where: { id: staff.id }, data: { role: "admin" } })
+    as(staff)
+    await P.removePerson(alice.id)
+    assert.equal(await prisma.application.count({ where: { userId: alice.id } }), 0)
   })
 })
