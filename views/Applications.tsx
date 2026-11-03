@@ -11,7 +11,7 @@ import { useApp } from "@/lib/state"
 import { reloadIfStale } from "@/lib/stale"
 import { listApplications } from "@/lib/application-actions"
 import { coById, fmt } from "@/lib/data"
-import type { AppliedPostingState, StudentApplications } from "@/lib/types"
+import type { AppliedPostingState, AppliedRole, StudentApplications } from "@/lib/types"
 
 type Show = "all" | "closed"
 const STATE_LABEL: Record<AppliedPostingState, string> = { open: "Open", expired: "Expired", removed: "Removed from board" }
@@ -21,6 +21,16 @@ const STATE_STYLE: Record<AppliedPostingState, string> = {
   removed: "bg-muted text-muted-foreground",
 }
 const day = (t: number) => new Date(t).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+
+/** A student's applications grouped under their company, companies A to Z, newest application first within each. */
+function byCompany(list: AppliedRole[]): [string, AppliedRole[]][] {
+  const groups = new Map<string, AppliedRole[]>()
+  for (const a of list) {
+    const name = coById(a.company).name
+    groups.set(name, [...(groups.get(name) || []), a])
+  }
+  return [...groups].sort(([x], [y]) => x.localeCompare(y)).map(([name, roles]) => [name, roles.sort((a, b) => b.appliedAt - a.appliedAt)])
+}
 
 /**
  * Admin page: which student applied to which role, as the students marked it on the job board.
@@ -92,25 +102,34 @@ export function Applications({ flash }: { flash?: boolean }) {
                   {s.status === "blocked" && <span className="text-xs text-muted-foreground">Blocked</span>}
                   <span className="tabular-nums text-muted-foreground">{s.applications.length} applied</span>
                 </summary>
-                <ul className="bg-muted/30">
-                  {s.applications.map((a) => (
-                    <li key={a.postingId} className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t py-2 pl-12 pr-5 text-sm">
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate font-medium">{a.title}</p>
-                        <p className="truncate text-xs text-muted-foreground">
-                          {coById(a.company).name}{a.location ? `, ${a.location}` : ""}{a.deadline ? ` · deadline ${fmt(a.deadline)}` : ""}
-                        </p>
-                      </div>
-                      <span className="text-xs tabular-nums text-muted-foreground">Applied {day(a.appliedAt)}</span>
-                      <span className={cn("rounded px-1.5 py-px text-xs font-medium", STATE_STYLE[a.state])}>{STATE_LABEL[a.state]}</span>
-                      {a.url && (
-                        <a href={a.url} target="_blank" rel="noopener noreferrer" className="text-muted-foreground hover:text-foreground" aria-label={`Open ${a.title} at ${coById(a.company).name} (new tab)`}>
-                          <ExternalLink className="size-3.5" />
-                        </a>
-                      )}
-                    </li>
+                <div className="bg-muted/30">
+                  {byCompany(s.applications).map(([company, roles]) => (
+                    <section key={company} aria-label={`${company}, ${roles.length} applied`}>
+                      <h4 className="flex items-baseline gap-2 border-t bg-muted/50 py-1.5 pl-12 pr-5 text-xs font-semibold uppercase tracking-[0.07em] text-muted-foreground">
+                        {company} <span className="font-normal tabular-nums normal-case tracking-normal">{roles.length}</span>
+                      </h4>
+                      <ul>
+                        {roles.map((a) => (
+                          <li key={a.postingId} className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t py-2 pl-12 pr-5 text-sm">
+                            <div className="min-w-0 flex-1">
+                              <p className="truncate font-medium">{a.title}</p>
+                              <p className="truncate text-xs text-muted-foreground">
+                                {a.location}{a.location && a.deadline ? " · " : ""}{a.deadline ? `deadline ${fmt(a.deadline)}` : ""}
+                              </p>
+                            </div>
+                            <span className="text-xs tabular-nums text-muted-foreground">Applied {day(a.appliedAt)}</span>
+                            <span className={cn("rounded px-1.5 py-px text-xs font-medium", STATE_STYLE[a.state])}>{STATE_LABEL[a.state]}</span>
+                            {a.url && (
+                              <a href={a.url} target="_blank" rel="noopener noreferrer" className="text-muted-foreground hover:text-foreground" aria-label={`Open ${a.title} at ${company} (new tab)`}>
+                                <ExternalLink className="size-3.5" />
+                              </a>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                    </section>
                   ))}
-                </ul>
+                </div>
               </details>
             </li>
           ))}
