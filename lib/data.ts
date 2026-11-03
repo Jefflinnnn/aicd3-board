@@ -205,6 +205,7 @@ export const COMPANIES: Company[] = [
   { id: "abbott", name: "Abbott", type: "Large pharma", hq: "Abbott Park, IL", site: "https://www.abbott.com", focus: [0.25, 0.5, 0.25], w: 0 },
   { id: "zoetis", name: "Zoetis", type: "Large pharma", hq: "Parsippany, NJ", site: "https://www.zoetis.com", focus: [0.3, 0.55, 0.15], w: 0 },
   { id: "beigene", name: "BeiGene", type: "Mid-size biotech", hq: "Cambridge, MA", site: "https://www.beonemedicines.com", focus: [0.45, 0.4, 0.15], w: 0 },
+  { id: "genmab", name: "Genmab", type: "Mid-size biotech", hq: "Copenhagen, Denmark", site: "https://www.genmab.com", focus: [0.45, 0.4, 0.15], w: 0 },
   { id: "lila", name: "Lila Sciences", type: "Startup", hq: "Cambridge, MA", site: "https://www.lila.ai", focus: [0.4, 0.05, 0.55], w: 0 },
   { id: "ginkgo", name: "Ginkgo Bioworks", type: "Tech", hq: "Boston, MA", site: "https://www.ginkgobioworks.com", focus: [0.4, 0.1, 0.5], w: 0 },
   // tracked, but no careers site the scraper can read: postings come in by hand or by import

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-pharma_internships.py - collect internship / co-op postings from 61 pharma, biotech and AI drug
+pharma_internships.py - collect internship / co-op postings from 62 pharma, biotech and AI drug
 discovery career sites using the public JSON feeds and pages that power those sites.
 
 Platforms covered (verified October 2026 unless marked otherwise in COMPANIES):
@@ -17,7 +17,7 @@ Platforms covered (verified October 2026 unless marked otherwise in COMPANIES):
   * Eightfold job search API - Bayer
   * SAP SuccessFactors CSB   - Boehringer Ingelheim, Novo Nordisk, Astellas, Daiichi Sankyo
                               (server-rendered search pages)
-  * Phenom career sites      - Merck KGaA (EMD Serono), UCB
+  * Phenom career sites      - Merck KGaA (EMD Serono), UCB, Genmab
   * AbbVie job search        - careers.abbvie.com (its vacancy sitemap with --respect-robots)
   * Backups when Workday is down: careers.gene.com (Phenom) for Genentech,
     careers.amgen.com (Radancy) for Amgen
@@ -202,6 +202,9 @@ COMPANIES: dict[str, dict] = {
     "Abbott":               {"id": "abbott", "platform": "workday", "boards": [("abbott", "wd5", "abbottcareers")]},
     "Zoetis":               {"id": "zoetis", "platform": "workday", "boards": [("zoetis", "wd5", "zoetis")]},
     "BeiGene":              {"id": "beigene", "platform": "workday", "boards": [("beigene", "wd5", "BeiGene")]},
+    # Phenom; its jobs have no jobUrl (the link is built from jobSeqNo)
+    "Genmab":               {"id": "genmab", "platform": "phenom", "base": "https://careers.genmab.com", "path": "/global/en",
+                             "terms": ["intern", "internship", "co-op"]},
     # AI / synthetic biology
     "Lila Sciences":        {"id": "lila", "platform": "greenhouse", "token": "lilasciences"},
     "Ginkgo Bioworks":      {"id": "ginkgo", "platform": "greenhouse", "token": "ginkgobioworks"},
