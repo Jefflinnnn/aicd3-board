@@ -96,13 +96,7 @@ export function ReviewQueue({ onEdit, flash }: { onEdit: (s: StagedJob) => void;
       flush
       className={cn("transition-shadow duration-500", flash && "ring-2 ring-primary")}
       title="Review queue"
-      sub={
-        <>
-          Postings that look vague or off-target wait here, hidden from students, until someone approves them.
-          <br />
-          Approve to publish, edit to fix the details first, or reject to keep it off the board.
-        </>
-      }
+      sub="Hidden from students until approved. Edit to fix details first, or reject to keep it off the board."
       right={
         <Segmented
           label="Which postings"

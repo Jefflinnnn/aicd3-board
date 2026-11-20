@@ -109,7 +109,7 @@ export function RoutingFlow({ tally, live, classifier }: { tally: RoutingTally; 
   const mid0 = TOP + AVAIL / 2
 
   const sH = h(scraped), sY = mid0 - sH / 2
-  const dH = h(toD3), dY = mid0 - dH / 2 - 10
+  const dH = h(toD3), dY = Math.max(sY, mid0 - dH / 2 - 10)
   // outcomes stacked down the right, in a fixed order, the space between them fixed so labels never collide
   const outs: (typeof OUT[number] & { n: number; target: number; y: number; h: number })[] = []
   let y = TOP - 6

@@ -14,13 +14,20 @@ import { coById, fmt } from "@/lib/data"
 import type { AppliedPostingState, AppliedRole, StudentApplications } from "@/lib/types"
 
 type Show = "all" | "closed"
-const STATE_LABEL: Record<AppliedPostingState, string> = { open: "Open", expired: "Expired", removed: "Removed from board" }
+const STATE_LABEL: Record<AppliedPostingState, string> = { open: "Open", expired: "Expired", removed: "Removed" }
 const STATE_STYLE: Record<AppliedPostingState, string> = {
   open: "bg-good/15 text-good",
   expired: "bg-muted text-muted-foreground",
-  removed: "bg-muted text-muted-foreground",
+  removed: "border border-dashed text-muted-foreground",
 }
-const day = (t: number) => new Date(t).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+const STATE_HINT: Record<AppliedPostingState, string> = {
+  open: "Still open on the board",
+  expired: "Past its deadline",
+  removed: "Taken off the board (filled, removed or deleted)",
+}
+const ORDER: AppliedPostingState[] = ["open", "expired", "removed"]
+// the year only when it isn't this year
+const day = (t: number) => new Date(t).toLocaleDateString("en-US", { month: "short", day: "numeric", ...(new Date(t).getFullYear() !== new Date().getFullYear() && { year: "numeric" }) })
 
 /** A student's applications grouped under their company, companies A to Z, newest application first within each. */
 function byCompany(list: AppliedRole[]): [string, AppliedRole[]][] {
@@ -75,14 +82,14 @@ export function Applications({ flash }: { flash?: boolean }) {
       flush
       className={cn("transition-shadow duration-500", flash && "ring-2 ring-primary")}
       title="Student applications"
-      sub={students === null ? "Roles students have marked as applied on the job board." : `${total} application${total === 1 ? "" : "s"} from ${students.length} student${students.length === 1 ? "" : "s"}. Roles stay listed after they expire or are removed from the board.`}
+      sub={students === null ? "Roles students marked as applied on the job board." : `${total} application${total === 1 ? "" : "s"} from ${students.length} student${students.length === 1 ? "" : "s"}, kept after a role closes.`}
       right={
         <div className="flex flex-wrap items-center gap-2">
           <div className="relative">
             <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
             <Input type="search" aria-label="Filter by student name or email" placeholder="Find a student" value={q} onChange={(e) => setQ(e.target.value)} className="h-9 w-48 pl-8" />
           </div>
-          <Segmented label="Show" value={show} onChange={setShow} items={[["all", `All (${total})`], ["closed", `Expired or removed (${closed})`]]} />
+          <Segmented label="Show" value={show} onChange={setShow} items={[["all", `All (${total})`], ["closed", `Closed (${closed})`]]} />
         </div>
       }
     >
@@ -95,30 +102,34 @@ export function Applications({ flash }: { flash?: boolean }) {
               <details className="group" open={rows.length === 1 || !!q.trim()}>
                 <summary className="flex cursor-pointer list-none flex-wrap items-center gap-x-3 gap-y-1 px-5 py-2.5 text-sm hover:bg-accent/40 focus-visible:bg-accent/40 focus-visible:outline-none [&::-webkit-details-marker]:hidden">
                   <ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-90" aria-hidden />
-                  <div className="min-w-0 flex-1">
+                  <div className="min-w-0 flex-1 basis-[calc(100%-1.75rem)] sm:basis-0">
                     <p className="truncate font-medium">{s.name || s.email}</p>
                     {s.name && <p className="truncate text-xs text-muted-foreground">{s.email}</p>}
                   </div>
-                  {s.status === "blocked" && <span className="text-xs text-muted-foreground">Blocked</span>}
-                  <span className="tabular-nums text-muted-foreground">{s.applications.length} applied</span>
+                  {s.status === "blocked" && <span className="rounded border border-destructive/40 px-1.5 py-px text-xs text-destructive">Blocked</span>}
+                  <span className="flex items-center gap-1.5" aria-label={ORDER.map((k) => `${s.applications.filter((a) => a.state === k).length} ${STATE_LABEL[k].toLowerCase()}`).join(", ")}>
+                    {ORDER.map((k) => {
+                      const n = s.applications.filter((a) => a.state === k).length
+                      return n > 0 && <span key={k} className={cn("rounded px-1.5 py-px text-xs font-medium tabular-nums", STATE_STYLE[k])} aria-hidden>{n} {STATE_LABEL[k].toLowerCase()}</span>
+                    })}
+                  </span>
+                  <span className="w-28 text-right text-xs tabular-nums text-muted-foreground">last {day(Math.max(...s.applications.map((a) => a.appliedAt)))}</span>
                 </summary>
-                <div className="bg-muted/30">
+                <div className="bg-muted/30 pb-2">
                   {byCompany(s.applications).map(([company, roles]) => (
                     <section key={company} aria-label={`${company}, ${roles.length} applied`}>
-                      <h4 className="flex items-baseline gap-2 border-t bg-muted/50 py-1.5 pl-12 pr-5 text-xs font-semibold uppercase tracking-[0.07em] text-muted-foreground">
-                        {company} <span className="font-normal tabular-nums normal-case tracking-normal">{roles.length}</span>
-                      </h4>
+                      <h4 className="border-t pb-0.5 pl-12 pr-5 pt-2.5 text-xs font-semibold text-muted-foreground">{company}</h4>
                       <ul>
                         {roles.map((a) => (
-                          <li key={a.postingId} className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t py-2 pl-12 pr-5 text-sm">
-                            <div className="min-w-0 flex-1">
-                              <p className="truncate font-medium">{a.title}</p>
+                          <li key={a.postingId} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-1.5 pl-12 pr-5 text-sm">
+                            <div className="min-w-0 flex-1 basis-full sm:basis-0">
+                              <p className="font-medium sm:truncate">{a.title}</p>
                               <p className="truncate text-xs text-muted-foreground">
                                 {a.location}{a.location && a.deadline ? " · " : ""}{a.deadline ? `deadline ${fmt(a.deadline)}` : ""}
                               </p>
                             </div>
                             <span className="text-xs tabular-nums text-muted-foreground">Applied {day(a.appliedAt)}</span>
-                            <span className={cn("rounded px-1.5 py-px text-xs font-medium", STATE_STYLE[a.state])}>{STATE_LABEL[a.state]}</span>
+                            <span className={cn("w-[4.5rem] rounded px-1.5 py-px text-center text-xs font-medium", STATE_STYLE[a.state])} title={STATE_HINT[a.state]}>{STATE_LABEL[a.state]}</span>
                             {a.url && (
                               <a href={a.url} target="_blank" rel="noopener noreferrer" className="text-muted-foreground hover:text-foreground" aria-label={`Open ${a.title} at ${company} (new tab)`}>
                                 <ExternalLink className="size-3.5" />
