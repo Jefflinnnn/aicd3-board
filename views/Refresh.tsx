@@ -266,7 +266,7 @@ export function Refresh() {
         <div className="mt-4 flex flex-col gap-3">
           <RefreshSteps run={last} p={p} selected={shown} onSelect={setPicked} classifier={classifier} />
           <div key={shown} className="min-w-0 rounded-md border p-4 duration-300 ease-out animate-in fade-in slide-in-from-bottom-1 motion-reduce:animate-none">
-            {shown === "scrape" && (p ? <RefreshRoutes run={last} stages={false} /> : <Quiet>This run didn&apos;t report its progress.</Quiet>)}
+            {shown === "scrape" && (p ? <RefreshRoutes run={last} /> : <Quiet>This run didn&apos;t report its progress.</Quiet>)}
             {shown === "classify" && (tally
               ? <RoutingFlow tally={tally} live={running && p?.step === "classify"} classifier={classifier} />
               : <Quiet>{running ? "Routing starts once scraping finishes." : "This run didn't report where its postings went."}</Quiet>)}
