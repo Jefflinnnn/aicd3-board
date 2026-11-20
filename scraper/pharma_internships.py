@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-pharma_internships.py - collect internship / co-op postings from 62 pharma, biotech and AI drug
+pharma_internships.py - collect internship / co-op postings from 65 pharma, biotech and AI drug
 discovery career sites using the public JSON feeds and pages that power those sites.
 
 Platforms covered (verified October 2026 unless marked otherwise in COMPANIES):
@@ -8,7 +8,7 @@ Platforms covered (verified October 2026 unless marked otherwise in COMPANIES):
                               Regeneron, Genentech (Roche), Amgen, Eli Lilly, Takeda,
                               Gilead, Novartis, Biogen, NVIDIA, Johnson & Johnson, Moderna,
                               Eisai, CSL, Viatris, Denali, Cytokinetics, Thermo Fisher, Lonza,
-                              Catalent, IQVIA, Labcorp, Abbott, Zoetis, BeiGene
+                              Catalent, IQVIA, Labcorp, Abbott, Zoetis, BeiGene, Exelixis
   * Greenhouse Job Board API - Revolution Medicines, Recursion, Generate:Biomedicines, Nurix,
                               Septerna, Maze, BridgeBio, Biohub, Calico, Altos Labs, Profluent,
                               Noetik, Atomic AI, Freenome, Lila Sciences, Ginkgo Bioworks
@@ -18,6 +18,9 @@ Platforms covered (verified October 2026 unless marked otherwise in COMPANIES):
   * SAP SuccessFactors CSB   - Boehringer Ingelheim, Novo Nordisk, Astellas, Daiichi Sankyo
                               (server-rendered search pages)
   * Phenom career sites      - Merck KGaA (EMD Serono), UCB, Genmab
+  * Pinpoint postings feed   - BigHat Biosciences
+  * USAJOBS Search API       - U.S. Food and Drug Administration (needs a free API key: USAJOBS_API_KEY and
+                              USAJOBS_EMAIL in .env.local; https://developer.usajobs.gov/apirequest/)
   * AbbVie job search        - careers.abbvie.com (its vacancy sitemap with --respect-robots)
   * Backups when Workday is down: careers.gene.com (Phenom) for Genentech,
     careers.amgen.com (Radancy) for Amgen
@@ -50,6 +53,7 @@ import csv
 import html as htmllib
 import json
 import logging
+import os
 import random
 import re
 import sys
@@ -208,6 +212,13 @@ COMPANIES: dict[str, dict] = {
     # AI / synthetic biology
     "Lila Sciences":        {"id": "lila", "platform": "greenhouse", "token": "lilasciences"},
     "Ginkgo Bioworks":      {"id": "ginkgo", "platform": "greenhouse", "token": "ginkgobioworks"},
+
+    # Added November 2026
+    "Exelixis":             {"id": "exelixis", "platform": "workday", "boards": [("exelixis", "wd1", "Exel")]},
+    # Pinpoint: bighatbio.com/careers links to bighatbiosciences.pinpointhq.com
+    "BigHat Biosciences":   {"id": "bighat", "platform": "pinpoint", "sub": "bighatbiosciences"},
+    # USAJOBS (agency subelement HE36 = FDA). Pathways student jobs are titled "Student Trainee (...)"
+    "U.S. Food and Drug Administration": {"id": "fda", "platform": "usajobs", "org": "HE36"},
 }
 
 # Titles that count as internships. Letter boundaries keep out "International"/"Internal"
@@ -1131,6 +1142,142 @@ def scrape_ashby(client: PoliteClient, company: str, cfg: dict, details: bool) -
 
 
 # --------------------------------------------------------------------------------------
+# Pinpoint (bighatbiosciences.pinpointhq.com/postings.json: every open posting with its sections)
+# --------------------------------------------------------------------------------------
+PINPOINT_RATE = {"year": "per year", "month": "per month", "week": "per week", "day": "per day", "hour": "per hour"}
+
+
+def scrape_pinpoint(client: PoliteClient, company: str, cfg: dict, details: bool) -> list[Posting]:
+    sub = cfg["sub"]
+    r = client.get(f"https://{sub}.pinpointhq.com/postings.json", headers={"Accept": "application/json"})
+    r.raise_for_status()
+    out = []
+    for j in (r.json() or {}).get("data", []):
+        title = clean(j.get("title"))
+        intern_type = "intern" in (j.get("employment_type") or "").lower()
+        if not (wanted(title) or (MODE == "internship" and intern_type and not NOT_INTERN_RE.search(title))):
+            continue
+        loc = j.get("location") or {}
+        city, state = clean(loc.get("city")), clean(loc.get("province"))
+        where = f"{city}, {state}" if city and state else clean(loc.get("name"))
+        pay = ""
+        if j.get("compensation_visible") and j.get("compensation_minimum"):
+            lo, hi = j["compensation_minimum"], j.get("compensation_maximum")
+            cur = "$" if (j.get("compensation_currency") or "USD").upper() == "USD" else (j.get("compensation_currency") or "") + " "
+            pay = f"{cur}{lo:,}" + (f" - {cur}{hi:,}" if hi and hi != lo else "") + \
+                  (f" {PINPOINT_RATE.get(j.get('compensation_frequency') or '', '')}".rstrip())
+        p = Posting(company=company, title=title, location=where, locations=[where] if where else [],
+                    req_id=clean((j.get("job") or {}).get("requisition_id")) or str((j.get("job") or {}).get("id", "")),
+                    url=j.get("url") or "", source=f"pinpoint:{sub}", pay=pay,
+                    deadline=sane_deadline((j.get("deadline_at") or "")[:10]),
+                    extra={"remoteType": _remote_type(j.get("workplace_type"))})
+        if details:
+            parts = [j.get("description") or ""]
+            for key in ("key_responsibilities", "skills_knowledge_expertise", "benefits"):
+                if j.get(key):
+                    parts.append(f"<h3>{htmllib.escape(j.get(key + '_header') or key.replace('_', ' ').title())}</h3>{j[key]}")
+            body = "".join(parts)
+            if body.strip():
+                apply_detail_text(p, html_to_text(body))
+        out.append(p)
+    return out
+
+
+# --------------------------------------------------------------------------------------
+# USAJOBS Search API (data.usajobs.gov). Free key from https://developer.usajobs.gov/apirequest/, sent with
+# the email it was issued to; both are read from the environment or .env.local, never printed.
+# --------------------------------------------------------------------------------------
+USAJOBS_STUDENT_RE = re.compile(r"(?<![A-Za-z])(student\s+trainee|pathways)(?![A-Za-z])", re.I)
+
+
+def env_value(name: str) -> str:
+    """A setting from the environment, else from .env.local / .env at the repository root."""
+    if os.environ.get(name):
+        return os.environ[name]
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    for fname in (".env.local", ".env"):
+        path = os.path.join(root, fname)
+        if os.path.exists(path):
+            with open(path, encoding="utf-8") as f:
+                for line in f:
+                    k, sep, v = line.strip().partition("=")
+                    if sep and k.removeprefix("export ").strip() == name and v.strip():
+                        return v.strip().strip('"').strip("'")
+    return ""
+
+
+def usajobs_intern(title: str, hiring_paths: list) -> bool:
+    """A federal internship: an intern title, a Pathways "Student Trainee" title, or an announcement open to students."""
+    if NOT_INTERN_RE.search(title):
+        return False
+    return is_internship(title) or bool(USAJOBS_STUDENT_RE.search(title)) or \
+        any(str(h).lower() == "student" for h in hiring_paths or [])
+
+
+def scrape_usajobs(client: PoliteClient, company: str, cfg: dict, details: bool) -> list[Posting]:
+    key, email = env_value("USAJOBS_API_KEY"), env_value("USAJOBS_EMAIL")
+    if not key or not email:
+        raise RuntimeError("USAJOBS needs a free API key: request one at https://developer.usajobs.gov/apirequest/, "
+                           "then set USAJOBS_API_KEY and USAJOBS_EMAIL (the address the key was issued to) in .env.local")
+    headers = {"Host": "data.usajobs.gov", "User-Agent": email, "Authorization-Key": key, "Accept": "application/json"}
+    out, page = [], 1
+    while True:
+        r = client.get("https://data.usajobs.gov/api/Search", headers=headers,
+                       params={"Organization": cfg["org"], "ResultsPerPage": 500, "Page": page})
+        if r.status_code in (401, 403):
+            raise RuntimeError(f"USAJOBS refused the API key (HTTP {r.status_code}); check USAJOBS_API_KEY and USAJOBS_EMAIL")
+        r.raise_for_status()
+        res = (r.json() or {}).get("SearchResult") or {}
+        items = res.get("SearchResultItems") or []
+        for it in items:
+            d = it.get("MatchedObjectDescriptor") or {}
+            det = ((d.get("UserArea") or {}).get("Details")) or {}
+            title = clean(d.get("PositionTitle"))
+            if MODE == "job":
+                if not wanted(title):
+                    continue
+            elif not usajobs_intern(title, det.get("HiringPath") or []):
+                continue
+            locs = []
+            for l in d.get("PositionLocation") or []:
+                city, state = clean(l.get("CityName")).split(",")[0].strip(), clean(l.get("CountrySubDivisionCode"))
+                locs.append(f"{city}, {state}" if city and state else clean(l.get("LocationName")))
+            locs = [x for x in dict.fromkeys(locs) if x]
+            rem = (d.get("PositionRemuneration") or [{}])[0]
+            pay = ""
+            if rem.get("MinimumRange"):
+                lo, hi = float(rem["MinimumRange"]), float(rem.get("MaximumRange") or 0)
+                fmt = (lambda v: f"${v:,.2f}") if lo < 1000 else (lambda v: f"${v:,.0f}")
+                pay = fmt(lo) + (f" - {fmt(hi)}" if hi > lo else "") + (f" {clean(rem.get('Description')).lower()}" if rem.get("Description") else "")
+            country = clean(((d.get("PositionLocation") or [{}])[0]).get("CountryCode"))
+            p = Posting(company=company, title=title, location=clean(d.get("PositionLocationDisplay")) or (locs[0] if locs else ""),
+                        locations=locs, posted=(d.get("PublicationStartDate") or "")[:10],
+                        req_id=clean(d.get("PositionID")) or str(it.get("MatchedObjectId", "")),
+                        url=d.get("PositionURI") or "", source=f"usajobs:{cfg['org']}", pay=pay,
+                        deadline=sane_deadline((d.get("ApplicationCloseDate") or "")[:10]),
+                        extra={"country": country or "United States",
+                               "remoteType": "Remote" if str(det.get("RemoteIndicator")).lower() == "true" else ""})
+            if details:
+                # USAJOBS writes qualifications as paragraphs: one list item per sentence
+                sentences = lambda v: [x for x in re.split(r"(?<=[.;])\s+(?=[A-Z])", clean(v)) if x] if isinstance(v, str) else v
+                sections = [("Summary", det.get("JobSummary")), ("Duties", det.get("MajorDuties")),
+                            ("Qualifications", sentences(d.get("QualificationSummary"))),
+                            ("Education", sentences(det.get("Education"))), ("Requirements", det.get("Requirements"))]
+                # as HTML (headings, list items) so the section reader finds duties and qualifications
+                body = "".join(f"<h3>{h}</h3>" + ("<ul>" + "".join(f"<li>{htmllib.escape(str(x))}</li>" for x in v) + "</ul>"
+                                                  if isinstance(v, list) else f"<p>{v}</p>")
+                               for h, v in sections if v)
+                if body:
+                    apply_detail_text(p, html_to_text(body))
+            out.append(p)
+        pages = int(((res.get("UserArea") or {}).get("NumberOfPages")) or 1)
+        if page >= pages or not items:
+            break
+        page += 1
+    return out
+
+
+# --------------------------------------------------------------------------------------
 # Lever (public postings API, the same one jobs.lever.co pages call). One request lists every
 # posting with its full description, so --details costs nothing extra.
 # --------------------------------------------------------------------------------------
@@ -1638,6 +1785,8 @@ SCRAPERS = {
     "radancy": scrape_radancy,
     "ashby": scrape_ashby,
     "lever": scrape_lever,
+    "pinpoint": scrape_pinpoint,
+    "usajobs": scrape_usajobs,
     "eightfold": scrape_eightfold,
     "workday": scrape_workday,
     "greenhouse": scrape_greenhouse,
@@ -1667,12 +1816,16 @@ def first_url(cfg: dict) -> str:
         return f"https://jobs.ashbyhq.com/{cfg['org']}"
     if cfg["platform"] == "lever":
         return f"https://jobs.lever.co/{cfg['site']}"
+    if cfg["platform"] == "pinpoint":
+        return f"https://{cfg['sub']}.pinpointhq.com"
+    if cfg["platform"] == "usajobs":
+        return f"https://www.usajobs.gov/Search/Results?a={cfg['org']}"
     return cfg.get("base") or cfg.get("sitemap") or f"https://boards.greenhouse.io/{cfg.get('token')}"
 
 
 def cluster(cfg: dict) -> str:
     """Companies on the same Workday data centre share infrastructure (and probably rate limits)."""
-    return cfg["boards"][0][1] if cfg["platform"] == "workday" else cfg["platform"] + ":" + cfg.get("token", cfg.get("org", cfg.get("site", cfg.get("base", ""))))
+    return cfg["boards"][0][1] if cfg["platform"] == "workday" else cfg["platform"] + ":" + cfg.get("token", cfg.get("org", cfg.get("site", cfg.get("sub", cfg.get("base", "")))))
 
 
 CLUSTER_CAP = 2  # at most this many companies at once on one Workday data centre

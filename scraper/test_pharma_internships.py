@@ -745,7 +745,7 @@ class NewCompanies(unittest.TestCase):
                 "Recursion": ("greenhouse", "recursion"), "Generate:Biomedicines": ("greenhouse", "generate"), "insitro": ("ashby", "insitro")}
         for name, (platform, cid) in want.items():
             self.assertEqual((pi.COMPANIES[name]["platform"], pi.COMPANIES[name]["id"]), (platform, cid), name)
-        for gone in ("Alnylam", "BioMarin", "Exelixis", "Arcus Biosciences", "Dyno Therapeutics"):
+        for gone in ("Alnylam", "BioMarin", "Arcus Biosciences", "Dyno Therapeutics"):   # Exelixis came back in Nov 2026
             self.assertNotIn(gone, pi.COMPANIES)
 
     def test_nvidia_keeps_only_life_science_postings(self):
@@ -984,3 +984,69 @@ class AddedOct2026(unittest.TestCase):
         self.assertEqual(pi.to_import_record(p)["mode"], "Hybrid")
         self.assertEqual(pi.to_import_record(p)["responsibilities"], ["Fit PK models"])
         self.assertTrue(all(c[2]["params"]["domain"] == "bayer.com" for c in client.calls if "/api/apply/v2/jobs" in c[1]))
+
+
+# --- November 2026: Pinpoint (BigHat) and USAJOBS (FDA) ---
+class _R:
+    def __init__(s, data, code=200): s._d, s.status_code = data, code
+    def json(s): return s._d
+    def raise_for_status(s):
+        if s.status_code >= 400: raise RuntimeError(s.status_code)
+class _C:
+    def __init__(s, pages): s.pages, s.calls = pages, []
+    def get(s, url, **kw): s.calls.append((url, kw)); return s.pages.pop(0)
+
+PINPOINT_FIXTURE = {"data": [
+  {"id": "1", "title": "Machine Learning Intern", "url": "https://bighatbiosciences.pinpointhq.com/en/postings/abc",
+   "employment_type": "internship", "deadline_at": "2027-01-15T00:00:00Z", "compensation_visible": True,
+   "compensation_minimum": 40, "compensation_maximum": 50, "compensation_currency": "USD", "compensation_frequency": "hour",
+   "description": "<p>Build antibody design models.</p>", "key_responsibilities": "<ul><li>Train models</li></ul>",
+   "key_responsibilities_header": "Key Responsibilities", "skills_knowledge_expertise": "<ul><li>PhD student in CS</li></ul>",
+   "skills_knowledge_expertise_header": "Skills Knowledge and Expertise", "workplace_type": "hybrid",
+   "job": {"id": "9", "requisition_id": ""}, "location": {"city": "San Mateo", "province": "CA", "name": "San Mateo, CA"}},
+  {"id": "2", "title": "Senior Director, Clinical Operations", "url": "u2", "employment_type": "full_time",
+   "job": {"id": "8"}, "location": {"city": "San Mateo", "province": "CA"}}]}
+
+USAJOBS_FIXTURE = {"SearchResult": {"UserArea": {"NumberOfPages": "1"}, "SearchResultItems": [
+  {"MatchedObjectId": "111", "MatchedObjectDescriptor": {"PositionID": "FDA-CDER-27-001", "PositionTitle": "Student Trainee (Biologist)",
+    "PositionURI": "https://www.usajobs.gov/job/111", "PositionLocationDisplay": "Silver Spring, Maryland",
+    "PositionLocation": [{"CityName": "Silver Spring, Maryland", "CountrySubDivisionCode": "Maryland", "CountryCode": "United States"}],
+    "PositionRemuneration": [{"MinimumRange": "20.5", "MaximumRange": "26.1", "Description": "Per Hour"}],
+    "PublicationStartDate": "2026-11-10T00:00:00.0000", "ApplicationCloseDate": "2026-12-20T23:59:59.9970",
+    "QualificationSummary": "Enrolled in a graduate program in biology or bioinformatics.",
+    "UserArea": {"Details": {"JobSummary": "Computational toxicology modeling.", "MajorDuties": ["Build QSAR models in Python"], "HiringPath": ["student"]}}}},
+  {"MatchedObjectId": "222", "MatchedObjectDescriptor": {"PositionTitle": "Director, Office of Mission IT", "PositionURI": "u",
+    "PositionLocation": [{"CityName": "Silver Spring, Maryland", "CountrySubDivisionCode": "Maryland"}],
+    "UserArea": {"Details": {"HiringPath": ["public"]}}}}]}}
+
+
+
+class NovemberCompanies(unittest.TestCase):
+    def test_pinpoint(self):
+        ps = pi.scrape_pinpoint(_C([_R(PINPOINT_FIXTURE)]), "BigHat Biosciences", pi.COMPANIES["BigHat Biosciences"], True)
+        self.assertEqual([p.title for p in ps], ["Machine Learning Intern"])
+        p = ps[0]
+        _ = ("PIN", p.location, p.pay, p.deadline, p.req_id, p.extra, "|", p.description[:120].replace("\n"," / "))
+        self.assertEqual(p.location, "San Mateo, CA"); self.assertEqual(p.deadline, "2027-01-15")
+        self.assertTrue(pi.is_us(p))
+        rec = pi.to_import_record(p); _ = ("REC", rec["company"], rec["locations"], rec.get("responsibilities"), rec.get("qualifications"))
+    def test_usajobs(self):
+        orig = pi.env_value; pi.env_value = {"USAJOBS_API_KEY": "k", "USAJOBS_EMAIL": "e@x"}.get; self.addCleanup(setattr, pi, "env_value", orig)
+        c = _C([_R(USAJOBS_FIXTURE)])
+        ps = pi.scrape_usajobs(c, "U.S. Food and Drug Administration", pi.COMPANIES["U.S. Food and Drug Administration"], True)
+        self.assertEqual([p.title for p in ps], ["Student Trainee (Biologist)"])
+        p = ps[0]; _ = ("USA", p.location, p.locations, p.pay, p.posted, p.deadline, p.req_id, p.extra)
+        self.assertEqual(c.calls[0][1]["headers"]["Authorization-Key"], "k")
+        self.assertTrue(pi.is_us(p))
+        rec = pi.to_import_record(p); _ = ("REC", rec["company"], rec["locations"], rec.get("responsibilities"), rec.get("qualifications"), rec.get("deadline"))
+    def test_usajobs_no_key(self):
+        orig = pi.env_value; pi.env_value = lambda n: ""
+        try:
+            with self.assertRaises(RuntimeError): pi.scrape_usajobs(_C([]), "x", {"org": "HE36"}, False)
+        finally: pi.env_value = orig
+
+    def test_usajobs_interns(self):
+        self.assertTrue(pi.usajobs_intern("Student Trainee (Chemist)", []))
+        self.assertTrue(pi.usajobs_intern("Biologist", ["student", "public"]))
+        self.assertFalse(pi.usajobs_intern("Director, Office of Mission IT", ["public"]))
+        self.assertEqual(pi.COMPANIES["Exelixis"]["boards"][0][:3], ("exelixis", "wd1", "Exel"))

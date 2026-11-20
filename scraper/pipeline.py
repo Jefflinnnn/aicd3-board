@@ -174,8 +174,10 @@ def site_takes_roles(url: str, token: str) -> bool:
     try:
         r = requests.post(url.rstrip("/") + "/api/ingest?dryRun=1&closeMissing=0&kind=check", timeout=60,
                           data=b'{"postings": []}', headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
-    except requests.RequestException:
-        return False
+    except requests.RequestException as e:
+        # unreachable is not "too old": say so, rather than blame the app's version
+        raise SystemExit(f"Couldn't reach the app at {url} ({type(e).__name__}); check this computer's internet "
+                         f"connection. Nothing was changed.")
     if r.status_code == 401:
         raise SystemExit(f"Import check failed: the app at {url} refused the ingest token (it doesn't match SCRAPER_INGEST_TOKEN).")
     if r.status_code != 400:

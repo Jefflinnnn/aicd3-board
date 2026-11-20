@@ -54,6 +54,7 @@ CLOSED_TEXT = re.compile(
     r"no longer (?:accepting applications|available|open|active)|position has been filled|"
     r"job (?:posting )?(?:has )?(?:expired|closed|been removed)|this (?:job|position|requisition) (?:is )?(?:closed|no longer)|"
     r"the job you are (?:looking for|trying to apply for) (?:is no longer|has been)|"
+    r"(?:this )?job announcement has closed|"   # USAJOBS
     r"stelle ist (?:nicht mehr|bereits) (?:verfügbar|besetzt)|offre (?:n'est plus|a été pourvue)",
     re.IGNORECASE,
 )
