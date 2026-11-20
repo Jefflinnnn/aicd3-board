@@ -208,6 +208,9 @@ export const COMPANIES: Company[] = [
   { id: "genmab", name: "Genmab", type: "Mid-size biotech", hq: "Copenhagen, Denmark", site: "https://www.genmab.com", focus: [0.45, 0.4, 0.15], w: 0 },
   { id: "lila", name: "Lila Sciences", type: "Startup", hq: "Cambridge, MA", site: "https://www.lila.ai", focus: [0.4, 0.05, 0.55], w: 0 },
   { id: "ginkgo", name: "Ginkgo Bioworks", type: "Tech", hq: "Boston, MA", site: "https://www.ginkgobioworks.com", focus: [0.4, 0.1, 0.5], w: 0 },
+  { id: "exelixis", name: "Exelixis", type: "Mid-size biotech", hq: "Alameda, CA", site: "https://www.exelixis.com", focus: [0.45, 0.45, 0.1], w: 0 },
+  { id: "bighat", name: "BigHat Biosciences", type: "Startup", hq: "San Mateo, CA", site: "https://www.bighatbio.com", focus: [0.55, 0.1, 0.35], w: 0 },
+  { id: "fda", name: "U.S. Food and Drug Administration", type: "Institute", hq: "Silver Spring, MD", site: "https://www.fda.gov", focus: [0.15, 0.7, 0.15], w: 0 },
   // tracked, but no careers site the scraper can read: postings come in by hand or by import
   // (EvolutionaryScale's job board wasn't findable; Teva's job search is disallowed by robots.txt)
   { id: "evolutionaryscale", name: "EvolutionaryScale", type: "Startup", hq: "San Francisco, CA", site: "https://www.evolutionaryscale.ai", focus: [0.35, 0, 0.65], w: 0 },

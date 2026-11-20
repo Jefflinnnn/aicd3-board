@@ -40,6 +40,16 @@ $url = Read-EnvLocal "AICD3_URL"
 if (-not $url) { Note "FAILED: no AICD3_URL in .env.local (run scraper\register_daily_refresh.ps1 -Url https://<your-live-site>)"; exit 1 }
 if (-not (Test-Path $VPy)) { Note "FAILED: .venv-d3 is missing; run scraper\setup_d3.ps1"; exit 1 }
 
+# network: after waking from sleep the PC can take a few minutes to get back online. Wait up to 10 minutes for the
+# live site to answer instead of scraping into timeouts (which leaves the run with nothing to import).
+$online = $false
+for ($i = 0; $i -lt 20; $i++) {
+  try { Invoke-WebRequest -Uri $url -Method Head -TimeoutSec 15 -UseBasicParsing | Out-Null; $online = $true; break }
+  catch { if ($_.Exception.Response) { $online = $true; break } }   # any HTTP answer means we're online
+  Start-Sleep -Seconds 30
+}
+if (-not $online) { Note "FAILED: no internet connection (couldn't reach $url for 10 minutes); nothing was changed"; exit 1 }
+
 # d3: start the server if it isn't running (e.g. the PC restarted), and wait for it to load
 & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $Root "scraper\start_d3_server.ps1") -Wait -WaitMinutes 20 | Out-Null
 if ($LASTEXITCODE -ne 0) {
