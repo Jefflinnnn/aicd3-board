@@ -81,9 +81,11 @@ export default function Admin() {
 
   /* ---------- chart ---------- */
   const chartJobs = chartRange === "all" ? jobs : jobs.filter((j) => ageDays(j) < Number(chartRange))
+  // only companies with an open position among the postings in the range; the rest would be empty rows
   const chartCos = useMemo(() => {
     const tot = (id: string) => chartJobs.filter((j) => j.company === id).length
-    return [...COMPANIES].sort((a, b) => tot(b.id) - tot(a.id) || a.name.localeCompare(b.name))
+    return COMPANIES.filter((c) => chartJobs.some((j) => j.company === c.id && isLive(j)))
+      .sort((a, b) => tot(b.id) - tot(a.id) || a.name.localeCompare(b.name))
   }, [jobs, chartRange]) // eslint-disable-line react-hooks/exhaustive-deps
   const chart = useMemo(() => {
     const { base, valueAxis, catAxis } = chartBase()
@@ -203,6 +205,9 @@ export default function Admin() {
     } catch { fail() }
   }
   const stale = meta.lastUpdated ? now - meta.lastUpdated > 2 * 864e5 : true
+  // company requests and issue reports wait on staff: highlighted until they're handled
+  const urgent = (target: string) => (target === "admin-requests" && requests.length > 0) || (target === "admin-reports" && reports.length > 0)
+  const waiting = (n: number) => n > 0 && <span className="rounded-full bg-warn px-2 py-0.5 text-xs font-semibold text-background">{n} waiting</span>
 
   return (
     <div className="flex flex-col gap-5">
@@ -229,15 +234,21 @@ export default function Admin() {
           <button
             key={i}
             onClick={() => (target === "import" ? setImportOpen(true) : jumpTo(target))}
-            className="spotlight group relative flex min-w-0 flex-col items-center gap-2 bg-card px-4 py-5 text-center transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+            className={cn(
+              "spotlight group relative flex min-w-0 flex-col items-center gap-2 bg-card px-4 py-5 text-center transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+              urgent(target) && "bg-warn-soft",
+            )}
           >
+            {urgent(target) && <span className="absolute left-3 top-3 size-2 rounded-full bg-warn" aria-hidden />}
             {target === "import" ? (
               <FileUp className="absolute right-3 top-3 size-3.5 opacity-0 transition-opacity group-hover:opacity-70 group-focus-visible:opacity-70" />
             ) : (
               <ArrowDown className="absolute right-3 top-3 size-3.5 opacity-0 transition-opacity group-hover:opacity-70 group-focus-visible:opacity-70" />
             )}
-            <span className="text-[0.72rem] font-semibold uppercase tracking-[0.08em] text-muted-foreground">{k}</span>
-            <span className={cn("whitespace-nowrap font-display text-3xl font-semibold leading-none tabular-nums", target === "import" && stale && "text-warn", target === "admin-review" && pending.length > 0 && "text-warn")}>{v}</span>
+            <span className={cn("text-[0.72rem] font-semibold uppercase tracking-[0.08em] text-muted-foreground", urgent(target) && "text-warn")}>
+              {k}{urgent(target) && <span className="sr-only"> (needs attention)</span>}
+            </span>
+            <span className={cn("whitespace-nowrap font-display text-3xl font-semibold leading-none tabular-nums", target === "import" && stale && "text-warn", target === "admin-review" && pending.length > 0 && "text-warn", urgent(target) && "text-warn")}>{v}</span>
             {/* room for two lines, so every tile lines up and nothing is cut off */}
             <span className="min-h-[2.5em] text-[0.8rem] leading-[1.25] text-muted-foreground text-balance [overflow-wrap:anywhere]">{d}</span>
           </button>
@@ -256,7 +267,7 @@ export default function Admin() {
         id="admin-chart"
         className={cn("transition-shadow duration-500", flash === "admin-chart" && "ring-2 ring-primary")}
         title="Postings by company"
-        sub={`${chartJobs.length} posting${chartJobs.length === 1 ? "" : "s"} first seen ${chartRange === "all" ? "since tracking began" : `in the past ${chartRange} days`}, live and expired`}
+        sub={`${chartCos.length} compan${chartCos.length === 1 ? "y" : "ies"} with open positions, from postings first seen ${chartRange === "all" ? "since tracking began" : `in the past ${chartRange} days`} (live and expired)`}
         right={
           <div className="flex flex-wrap items-center gap-2">
             <Segmented label="Time range" value={chartRange} onChange={setChartRange} items={[["7", "7d"], ["14", "14d"], ["30", "30d"], ["90", "90d"], ["all", "All time"]]} />
@@ -264,7 +275,11 @@ export default function Admin() {
           </div>
         }
       >
-        <EChart option={chart} merge height={COMPANIES.length * 24 + 72} label="Postings by company" />
+        {chartCos.length ? (
+          <EChart option={chart} merge height={chartCos.length * 24 + 72} label="Postings by company" />
+        ) : (
+          <p className="py-8 text-center text-sm text-muted-foreground">No company has an open position among postings first seen in this range.</p>
+        )}
       </Panel>
 
       <Panel
@@ -459,7 +474,7 @@ export default function Admin() {
       </Panel>
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <Panel id="admin-reports" className={cn("transition-shadow duration-500", flash === "admin-reports" && "ring-2 ring-primary")} title="Issue reports" sub="Sent from the job board">
+        <Panel id="admin-reports" className={cn("transition-shadow duration-500", reports.length > 0 && "border-warn/60 bg-warn-soft/40", flash === "admin-reports" && "ring-2 ring-primary")} title="Issue reports" sub="Sent from the job board" right={waiting(reports.length)}>
           {reports.length ? (
             <ul>
               {reports.map((r) => {
@@ -518,7 +533,7 @@ export default function Admin() {
       </div>
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <Panel id="admin-requests" className={cn("transition-shadow duration-500", flash === "admin-requests" && "ring-2 ring-primary")} title="Company requests" sub="Sent from the Company Info page">
+        <Panel id="admin-requests" className={cn("transition-shadow duration-500", requests.length > 0 && "border-warn/60 bg-warn-soft/40", flash === "admin-requests" && "ring-2 ring-primary")} title="Company requests" sub="Sent from the Company Info page" right={waiting(requests.length)}>
           {requests.length ? (
             <ul>
               {requests.map((r) => (

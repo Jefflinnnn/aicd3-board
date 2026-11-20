@@ -1,7 +1,7 @@
 "use client"
 
 import { useState } from "react"
-import { ArrowUpRight, LayoutGrid, List, Plus } from "lucide-react"
+import { ArrowUpRight, ChevronDown, LayoutGrid, List, Plus } from "lucide-react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -155,8 +155,21 @@ export default function Companies() {
   const [view, setViewS] = useState<"cards" | "list">(() => store.get("coView", "cards"))
   const setView = (v: "cards" | "list") => { setViewS(v); store.set("coView", v) }
   const [reqOpen, setReqOpen] = useState(false)
-  const list = COMPANIES.filter((c) => filter === "all" || c.type === filter)
+  // companies with nothing open are tucked away below; whether that's expanded is remembered in this browser
+  const [showQuiet, setShowQuietS] = useState<boolean>(() => store.get("coShowQuiet", false))
+  const setShowQuiet = (v: boolean) => { setShowQuietS(v); store.set("coShowQuiet", v) }
+  const stats = new Map(COMPANIES.map((c) => [c.id, companyStats(c, jobs)]))
+  const inType = COMPANIES.filter((c) => filter === "all" || c.type === filter)
+  // the ones hiring now first: most open roles, then soonest deadline, then name
+  const list = inType
+    .filter((c) => stats.get(c.id)!.live > 0)
+    .sort((a, b) => {
+      const sa = stats.get(a.id)!, sb = stats.get(b.id)!
+      return sb.live - sa.live || (sa.nextDeadline || "9999").localeCompare(sb.nextDeadline || "9999") || a.name.localeCompare(b.name)
+    })
+  const quiet = inType.filter((c) => stats.get(c.id)!.live === 0).sort((a, b) => a.name.localeCompare(b.name))
   const liveTotal = jobs.filter(isLive).length
+  const hiring = COMPANIES.filter((c) => stats.get(c.id)!.live > 0).length
 
   return (
     <div className="flex flex-col gap-5">
@@ -167,6 +180,7 @@ export default function Companies() {
             We check these career sites twice a day for internship and co-op postings.
             <span className="mt-2 flex flex-wrap gap-x-6 gap-y-1">
               <span><b className="font-display text-lg font-semibold tabular-nums text-foreground">{COMPANIES.length}</b> companies</span>
+              <span><b className="font-display text-lg font-semibold tabular-nums text-foreground">{hiring}</b> with open roles</span>
               <span><b className="font-display text-lg font-semibold tabular-nums text-foreground">{liveTotal}</b> live roles</span>
             </span>
           </>
@@ -184,7 +198,7 @@ export default function Companies() {
         </div>
       </div>
 
-      {view === "list" ? (
+      {list.length > 0 && (view === "list" ? (
         <div key={"list" + filter} className="spotlight overflow-x-auto rounded-lg border bg-card duration-200 animate-in fade-in">
           <table className="w-full min-w-[880px] border-collapse text-sm">
             <thead>
@@ -199,7 +213,7 @@ export default function Companies() {
             </thead>
             <tbody>
               {list.map((c) => {
-                const st = companyStats(c, jobs)
+                const st = stats.get(c.id)!
                 const lv = st.live
                 const tot = st.total
                 return (
@@ -226,7 +240,7 @@ export default function Companies() {
       ) : (
       <div key={filter} className="grid auto-rows-fr gap-4 [grid-template-columns:repeat(auto-fill,minmax(min(100%,280px),1fr))]">
         {list.map((c, idx) => {
-          const st = companyStats(c, jobs)
+          const st = stats.get(c.id)!
           const lv = st.live
           const tot = st.total
           return (
@@ -274,6 +288,58 @@ export default function Companies() {
           )
         })}
       </div>
+      ))}
+
+      {!list.length && (
+        <p className="rounded-lg border border-dashed bg-card px-5 py-8 text-center text-sm text-muted-foreground">
+          {filter === "all" ? "No company has an open role right now." : `No ${filter.toLowerCase()} company has an open role right now.`} New postings show up here after the next refresh.
+        </p>
+      )}
+
+      {quiet.length > 0 && (
+        <section className="spotlight rounded-lg border bg-card">
+          <button
+            type="button"
+            onClick={() => setShowQuiet(!showQuiet)}
+            aria-expanded={showQuiet}
+            aria-controls="co-quiet"
+            className="flex w-full items-center justify-between gap-3 rounded-lg px-5 py-3.5 text-left transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+          >
+            <span>
+              <span className="font-display text-[1rem] font-semibold">No open roles right now</span>{" "}
+              <span className="text-sm tabular-nums text-muted-foreground">({quiet.length})</span>
+              <span className="block text-[0.82rem] text-muted-foreground">Still checked twice a day; they move up when something opens.</span>
+            </span>
+            <ChevronDown className={cn("size-4 shrink-0 text-muted-foreground transition-transform duration-200", showQuiet && "rotate-180")} />
+          </button>
+          {showQuiet && (
+            <ul id="co-quiet" className="grid border-t duration-200 animate-in fade-in [grid-template-columns:repeat(auto-fill,minmax(min(100%,260px),1fr))]">
+              {quiet.map((c) => {
+                const st = stats.get(c.id)!
+                return (
+                  <li key={c.id} className="flex items-center justify-between gap-3 border-b px-5 py-2.5 text-sm">
+                    <div className="min-w-0">
+                      <div className="truncate font-medium" title={c.name}>{c.name}</div>
+                      <div className="truncate text-xs text-muted-foreground">
+                        {c.type} · {st.lastPosted ? `last posting ${fmt(st.lastPosted)}` : "no postings yet"}
+                      </div>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-3">
+                      {st.total > 0 && (
+                        <button type="button" className="text-xs font-medium text-primary hover:underline" onClick={() => go("jobs", { company: [c.id], status: "all" })}>Past roles</button>
+                      )}
+                      {c.site && (
+                        <a href={c.site} target="_blank" rel="noopener noreferrer" className="inline-flex items-center text-muted-foreground hover:text-foreground" aria-label={`${c.name} website`}>
+                          <ArrowUpRight className="size-3.5" />
+                        </a>
+                      )}
+                    </div>
+                  </li>
+                )
+              })}
+            </ul>
+          )}
+        </section>
       )}
 
       {requests.length > 0 && (
