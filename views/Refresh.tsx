@@ -209,16 +209,18 @@ export function Refresh() {
             ) : (
               <p className={cn("text-xs", stale(st.lastScheduled, now) ? "text-warn" : "text-muted-foreground")}>
                 <Clock className="mr-1 inline size-3 -translate-y-px" />
-                Twice daily (9 AM and 9 PM) from the GPU PC
-                {st.lastScheduled
-                  ? ` · last scheduled run ${when(st.lastScheduled.at)}: ${st.lastScheduled.status}`
-                  : " · no scheduled run has reached this site yet (see the README)"}
-                {stale(st.lastScheduled, now) && st.lastScheduled ? ". That's over a day ago: check the PC is on and signed in." : ""}
-                {st.queue && (
-                  <span className={cn("block", !heard && now ? "text-warn" : "")}>
-                    {heard
-                      ? `Refresh now: ${st.requestCheck!.host || "the GPU PC"} checks every 5 minutes (last check ${ago(st.requestCheck!.at, now)})`
-                      : `${notHeard}: Refresh now won't reach it until its request check is set up (scraper\\register_daily_refresh.ps1 -Url <this site>).`}
+                Runs at 9 AM and 9 PM on {st.lastScheduled?.host || st.requestCheck?.host || "the GPU PC"}
+                {/* the latest scheduled run, unless it's the run already described above */}
+                {!st.lastScheduled
+                  ? " · no scheduled run has reached this site yet (see the README)"
+                  : !(last && last.trigger === "schedule" && Math.abs(last.startedAt - st.lastScheduled.at) < 6e4)
+                    ? ` · last scheduled run ${when(st.lastScheduled.at)}: ${st.lastScheduled.status}`
+                    : ""}
+                {stale(st.lastScheduled, now) && st.lastScheduled ? ". The last scheduled run was over a day ago: check the PC is on and signed in." : ""}
+                {st.queue && heard && ` · picks up Refresh now every 5 minutes (checked ${ago(st.requestCheck!.at, now)})`}
+                {st.queue && !heard && (
+                  <span className={cn("block", now ? "text-warn" : "")}>
+                    {`${notHeard}: Refresh now won't reach it until its request check is set up (scraper\\register_daily_refresh.ps1 -Url <this site>).`}
                   </span>
                 )}
               </p>

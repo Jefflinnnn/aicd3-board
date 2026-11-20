@@ -115,7 +115,7 @@ export function People({ flash }: { flash?: boolean }) {
       flush
       className={cn("transition-shadow duration-500", flash && "ring-2 ring-primary")}
       title="People & access"
-      sub="Everyone signs in with a code emailed to their UCSF address. New accounts wait here until staff approve them, unless their email was invited or matches an approved school domain."
+      sub="New UCSF accounts wait for approval here, unless they were invited."
       right={
         <Segmented
           label="Show"
@@ -182,7 +182,7 @@ export function People({ flash }: { flash?: boolean }) {
               const canTouch = !self && (isAdmin || p.role === "student")
               return (
                 <li key={p.id} className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-t px-5 py-2.5 text-sm">
-                  <div className="min-w-0 flex-1">
+                  <div className="min-w-0 flex-1 basis-full sm:basis-0">
                     <p className="truncate font-medium">{p.name || p.email}{self && <span className="ml-1.5 text-xs font-normal text-muted-foreground">(you)</span>}</p>
                     <p className="flex flex-wrap items-center gap-1.5 truncate text-xs text-muted-foreground">
                       {p.email}

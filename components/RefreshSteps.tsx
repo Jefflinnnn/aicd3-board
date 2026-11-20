@@ -91,16 +91,15 @@ export function RefreshSteps({ run, p, selected, onSelect, classifier }: {
                 selected === s.id && "shadow-[inset_0_0_0_1px_hsl(var(--foreground)/0.25)]",
               )}
             >
-              <span className="flex items-center gap-1.5 text-[0.68rem] font-semibold uppercase tracking-[0.07em] text-muted-foreground">
+              <span className={cn("flex items-center gap-1.5 text-sm font-medium", st === "next" && "text-muted-foreground")} title={s.what}>
                 <span className={cn(
                   "grid size-4 place-items-center rounded-full text-[0.6rem] transition-colors duration-300",
                   st === "done" ? "bg-good text-white" : st === "now" ? "bg-primary text-primary-foreground" : st === "failed" ? "bg-destructive text-white" : "border",
                 )}>
                   {st === "done" ? <Check className="size-2.5" /> : st === "failed" ? "!" : i + 1}
                 </span>
-                {s.what}
+                {s.label}
               </span>
-              <span className={cn("text-sm font-medium", st === "next" && "text-muted-foreground")}>{s.label}</span>
               <span className="min-h-[1rem] truncate text-xs tabular-nums text-muted-foreground" style={{ maxWidth: "100%" }}>
                 {text || (st === "next" ? "Waiting" : st === "failed" ? "Stopped here" : "")}
               </span>

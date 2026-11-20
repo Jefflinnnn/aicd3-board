@@ -24,6 +24,9 @@ import { cn } from "@/lib/utils"
 import { useApp } from "@/lib/state"
 import { BIN_DAYS, CATS, COMPANIES, CUSTOM_CAT_COLORS, ageDays, catById, coById, fmt, isLive, store, type Category, type Job, type StagedJob } from "@/lib/data"
 
+/** a short unique-enough suffix for new ids (outside render, so the linter knows it only runs on click) */
+const stamp = () => Date.now().toString(36)
+
 export function ago(t?: number) {
   if (!t) return "never"
   const m = Math.round((Date.now() - t) / 60000)
@@ -188,7 +191,7 @@ export default function Admin() {
     if (custom.length >= CUSTOM_CAT_COLORS.length) return setCatErr(`You can add up to ${CUSTOM_CAT_COLORS.length} categories so the chart colors stay easy to tell apart. Remove one first.`)
     const used = new Set(custom.map((c) => c.color))
     const color = CUSTOM_CAT_COLORS.find((c) => !used.has(c)) as string
-    const id = "c-" + name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") + "-" + Date.now().toString(36)
+    const id = "c-" + name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") + "-" + stamp()
     try {
       await setCustomCats([...custom, { id, label: name, short: name, color, custom: true }])
       toast("Category added", { description: name })
@@ -213,7 +216,7 @@ export default function Admin() {
     <div className="flex flex-col gap-5">
       <PageHead
         title="Admin"
-        sub={<>Program staff only. Add, import, edit and remove postings.<br />Anything vague or off-target waits in the review queue until someone approves it.</>}
+        sub="Program staff only: postings, the review queue, refreshes, people and what students send in."
         right={
           <div className="flex flex-wrap gap-2">
             <Button variant="outline" onClick={() => setImportOpen(true)}><FileUp className="size-4" /> Import postings</Button>
@@ -258,6 +261,59 @@ export default function Admin() {
       <Refresh />
 
       <ReviewQueue flash={flash === "admin-review"} onEdit={(sj) => openForm(sj, true)} />
+
+      {/* what students sent in, side by side: both wait on staff */}
+      <div className="grid gap-4 lg:grid-cols-2">
+        <Panel id="admin-requests" className={cn("transition-shadow duration-500", requests.length > 0 && "border-warn/60 bg-warn-soft/40", flash === "admin-requests" && "ring-2 ring-primary")} title="Company requests" sub="Sent from the Company Info page" right={waiting(requests.length)}>
+          {requests.length ? (
+            <ul>
+              {requests.map((r) => (
+                <li key={r.uid + r.id} className="flex flex-wrap items-baseline gap-x-3 gap-y-1 border-t py-2.5 first:border-t-0">
+                  <b>{r.name}</b>
+                  <span className="flex basis-full flex-col text-sm text-muted-foreground">
+                    {[r.cat, r.site, r.email].filter(Boolean).map((x) => <span key={x}>{x}</span>)}
+                    <span className="text-xs">{names[r.uid] || (mode === "preview" ? "You" : "Someone")}, {fmt(r.date)}</span>
+                  </span>
+                  <Button size="sm" variant="ghost" className="ml-auto h-7" onClick={() => resolveInbox(r.uid, "requests", r.id).then(() => toast("Request dismissed"), fail)}>Dismiss</Button>
+                  {r.why && <p className="basis-full text-sm text-muted-foreground">{r.why}</p>}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="py-3 text-sm text-muted-foreground">No requests yet.</p>
+          )}
+        </Panel>
+        <Panel id="admin-reports" className={cn("transition-shadow duration-500", reports.length > 0 && "border-warn/60 bg-warn-soft/40", flash === "admin-reports" && "ring-2 ring-primary")} title="Issue reports" sub="Sent from the job board" right={waiting(reports.length)}>
+          {reports.length ? (
+            <ul>
+              {reports.map((r) => {
+                const j = jobs.find((x) => x.id === r.jobId)
+                return (
+                  <li key={r.uid + r.id} className="flex flex-wrap items-start gap-x-3 gap-y-1 border-t py-3 first:border-t-0">
+                    <div className="min-w-0 flex-1">
+                      <p className="font-semibold">{r.kind}</p>
+                      {r.jobId && (j ? (
+                        <button className="text-left text-sm text-primary hover:underline" onClick={() => openJob(j.id)}>{j.title}, {coById(j.company).name}</button>
+                      ) : (
+                        <p className="text-sm text-muted-foreground">Posting no longer listed</p>
+                      ))}
+                      <p className="mt-1 text-sm">{r.details}</p>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {names[r.uid] || (mode === "preview" ? "You" : "Someone")}, {fmt(r.date)}
+                        {r.email ? <><br />{r.email}</> : null}
+                      </p>
+                    </div>
+                    <Button size="sm" variant="ghost" className="h-7" onClick={() => resolveInbox(r.uid, "reports", r.id).then(() => toast("Report resolved"), fail)}>Resolve</Button>
+                  </li>
+                )
+              })}
+            </ul>
+          ) : (
+            <p className="py-3 text-sm text-muted-foreground">No open reports.</p>
+          )}
+        </Panel>
+
+      </div>
 
       <People flash={flash === "admin-people"} />
 
@@ -377,14 +433,14 @@ export default function Admin() {
                     <td className="px-3"><StatusPill job={j} /></td>
                     <td className="px-5" onClick={(e) => e.stopPropagation()}>
                       <div className="flex justify-end gap-1">
-                        <Button size="icon" variant="ghost" className="size-8" aria-label={`Edit ${j.title}`} onClick={() => openForm(j)}><Pencil className="size-4" /></Button>
+                        <Button size="icon" variant="ghost" className="size-8" aria-label={`Edit ${j.title}`} title="Edit" onClick={() => openForm(j)}><Pencil className="size-4" /></Button>
                         <Button size="icon" variant="ghost" className="size-8" aria-label={`Send ${j.title} to the review queue`} title="Send to review" onClick={() => toReview([j.id])}><ClipboardCheck className="size-4" /></Button>
                         {j.closed ? (
                           <Button size="icon" variant="ghost" className="size-8" aria-label={`Reopen ${j.title}`} title="Reopen" onClick={() => setTakenDown([j.id], false)}><Undo2 className="size-4" /></Button>
                         ) : (
                           <Button size="icon" variant="ghost" className="size-8" aria-label={`Mark ${j.title} as taken down`} title="Mark taken down" onClick={() => setTakenDown([j.id], true)}><EyeOff className="size-4" /></Button>
                         )}
-                        <Button size="icon" variant="ghost" className="size-8 text-destructive hover:bg-destructive/10 hover:text-destructive" aria-label={`Move ${j.title} to bin`} onClick={() => toBin([j.id])}><Trash2 className="size-4" /></Button>
+                        <Button size="icon" variant="ghost" className="size-8 text-destructive hover:bg-destructive/10 hover:text-destructive" aria-label={`Move ${j.title} to bin`} title="Move to bin" onClick={() => toBin([j.id])}><Trash2 className="size-4" /></Button>
                       </div>
                     </td>
                   </tr>
@@ -403,7 +459,7 @@ export default function Admin() {
         flush
         className={cn("transition-shadow duration-500", flash === "admin-bin" && "ring-2 ring-primary")}
         title="Deleted postings"
-        sub={`Postings stay here for ${BIN_DAYS} days before they are deleted for good. Restore them any time before then.`}
+        sub={bin.length ? `Kept ${BIN_DAYS} days, then deleted for good. Restore any time before then.` : `Empty. Deleted postings wait here for ${BIN_DAYS} days.`}
         right={bin.length > 0 && <Button size="sm" variant="outline" className="h-8 border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive" onClick={() => setPurge(bin.map((b) => b.job.id))}>Empty bin</Button>}
       >
         {binSel.size > 0 && (
@@ -468,43 +524,11 @@ export default function Admin() {
               </tbody>
             </table>
           </div>
-        ) : (
-          <p className="border-t px-5 py-10 text-center text-sm text-muted-foreground">The bin is empty. Deleted postings show up here.</p>
-        )}
+        ) : null}
       </Panel>
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <Panel id="admin-reports" className={cn("transition-shadow duration-500", reports.length > 0 && "border-warn/60 bg-warn-soft/40", flash === "admin-reports" && "ring-2 ring-primary")} title="Issue reports" sub="Sent from the job board" right={waiting(reports.length)}>
-          {reports.length ? (
-            <ul>
-              {reports.map((r) => {
-                const j = jobs.find((x) => x.id === r.jobId)
-                return (
-                  <li key={r.uid + r.id} className="flex flex-wrap items-start gap-x-3 gap-y-1 border-t py-3 first:border-t-0">
-                    <div className="min-w-0 flex-1">
-                      <p className="font-semibold">{r.kind}</p>
-                      {r.jobId && (j ? (
-                        <button className="text-left text-sm text-primary hover:underline" onClick={() => openJob(j.id)}>{j.title}, {coById(j.company).name}</button>
-                      ) : (
-                        <p className="text-sm text-muted-foreground">Posting no longer listed</p>
-                      ))}
-                      <p className="mt-1 text-sm">{r.details}</p>
-                      <p className="mt-1 text-xs text-muted-foreground">
-                        {names[r.uid] || (mode === "preview" ? "You" : "Someone")}, {fmt(r.date)}
-                        {r.email ? <><br />{r.email}</> : null}
-                      </p>
-                    </div>
-                    <Button size="sm" variant="ghost" className="h-7" onClick={() => resolveInbox(r.uid, "reports", r.id).then(() => toast("Report resolved"), fail)}>Resolve</Button>
-                  </li>
-                )
-              })}
-            </ul>
-          ) : (
-            <p className="py-8 text-center text-sm text-muted-foreground">No open reports.</p>
-          )}
-        </Panel>
-
-        <Panel id="admin-categories" title="Categories" sub="Used to group postings across the site. Removing a category moves its postings to Other.">
+        <Panel id="admin-categories" title="Categories" sub="Group postings across the site. Removing one moves its postings to Other.">
           <ul>
             {CATS.map((c) => {
               const n = jobs.filter((j) => j.category === c.id).length
@@ -529,28 +553,6 @@ export default function Admin() {
             </div>
             {catErr && <p id="newcat-err" className="text-xs text-destructive">{catErr}</p>}
           </form>
-        </Panel>
-      </div>
-
-      <div className="grid gap-4 lg:grid-cols-2">
-        <Panel id="admin-requests" className={cn("transition-shadow duration-500", requests.length > 0 && "border-warn/60 bg-warn-soft/40", flash === "admin-requests" && "ring-2 ring-primary")} title="Company requests" sub="Sent from the Company Info page" right={waiting(requests.length)}>
-          {requests.length ? (
-            <ul>
-              {requests.map((r) => (
-                <li key={r.uid + r.id} className="flex flex-wrap items-baseline gap-x-3 gap-y-1 border-t py-2.5 first:border-t-0">
-                  <b>{r.name}</b>
-                  <span className="flex basis-full flex-col text-sm text-muted-foreground">
-                    {[r.cat, r.site, r.email].filter(Boolean).map((x) => <span key={x}>{x}</span>)}
-                    <span className="text-xs">{names[r.uid] || (mode === "preview" ? "You" : "Someone")}, {fmt(r.date)}</span>
-                  </span>
-                  <Button size="sm" variant="ghost" className="ml-auto h-7" onClick={() => resolveInbox(r.uid, "requests", r.id).then(() => toast("Request dismissed"), fail)}>Dismiss</Button>
-                  {r.why && <p className="basis-full text-sm text-muted-foreground">{r.why}</p>}
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="py-8 text-center text-sm text-muted-foreground">No requests yet.</p>
-          )}
         </Panel>
         {mode === "preview" && (
           <Panel title="Sample data" sub={demo ? "The demo runs on example postings in your browser. Change anything here; reset to start over." : "This preview copy runs on sample postings in this browser."}>
