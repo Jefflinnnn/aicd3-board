@@ -223,10 +223,10 @@ Keep the lines you added yourself (`NEON_AUTH_COOKIE_SECRET`, `SCRAPER_INGEST_TO
 
 **Schema changes.** Make them on the dev branch with `pnpm db:migrate` (`prisma migrate dev`), commit the new folder in `prisma/migrations/`, and push. The production deploy applies it; there's no manual `db:deploy` step anymore.
 
-## Checks and automation (GitHub Actions)
+## Checks and automation
 
 - **CI** (`.github/workflows/ci.yml`) runs on every push and pull request: type check, lint, the access-rule tests against a throwaway Postgres, the scraper's tests, and a production build. Run the same locally with `pnpm check` and `pnpm test`.
-- **Job data refresh** (`.github/workflows/refresh.yml`) runs the scraper pipeline every other day on GitHub's machines and sends the results to the live site, so no computer has to stay on. GitHub's machines can't reach the d3 server on your PC, so these runs log a warning and use the keyword-rule classifier; to classify with d3, refresh from the PC instead (Admin page, or a self-hosted GitHub runner on that PC). Add two repository secrets (GitHub → Settings → Secrets and variables → Actions): `AICD3_URL` (the live site's address) and `AICD3_INGEST_TOKEN` (the same value as `SCRAPER_INGEST_TOKEN` in Vercel). Start a run by hand from the **Actions** tab → **Job data refresh** → **Run workflow** (with a dry-run option). Each run keeps its log and `fit.csv` for 14 days under the run's **Artifacts**. If you use this, turn off **Refresh automatically** on the Admin page of any local copy, so the two don't both refresh.
+- **Job data refresh** runs on the Windows GPU PC, not on GitHub: Windows Task Scheduler runs `scraper/daily_refresh.ps1` at 9 AM and 9 PM and picks up **Refresh now** from the Admin page every 5 minutes (set up with `scraper/register_daily_refresh.ps1`).
 - **Node** is pinned to 22 (`.nvmrc`, `engines` in `package.json`), the same on Vercel, in CI and locally (`nvm use`).
 
 ## How it's put together
